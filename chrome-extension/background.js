@@ -75,16 +75,44 @@ function sendToMeetTabs(message) {
   });
 }
 
+// Track mute state reported by content scripts
+let lastKnownMuted = false;
+
 // Listen for messages from content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "state_update") {
     console.log("MacMute: State update from content script:", message.muted);
-    // Forward to native host
+    lastKnownMuted = message.muted;
     if (port) {
       port.postMessage({ type: "state_update", muted: message.muted });
     }
   }
   return false;
+});
+
+// Unmute when no active Meet tabs remain (closed or suspended)
+function checkNoMeetTabsLeft() {
+  if (!lastKnownMuted) return;
+
+  chrome.tabs.query({ url: "https://meet.google.com/*" }, (tabs) => {
+    if (tabs.length === 0) {
+      console.log("MacMute: No active Meet tabs remain, sending unmute");
+      lastKnownMuted = false;
+      if (port) {
+        port.postMessage({ type: "state_update", muted: false });
+      }
+    }
+  });
+}
+
+// Tab closed
+chrome.tabs.onRemoved.addListener(() => checkNoMeetTabsLeft());
+
+// Tab URL changed (e.g. hibernated by a tab suspender extension)
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.url && !changeInfo.url.startsWith("https://meet.google.com/")) {
+    checkNoMeetTabsLeft();
+  }
 });
 
 // Connect on startup
