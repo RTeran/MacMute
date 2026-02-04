@@ -12,7 +12,6 @@ class MuteStateManager: ObservableObject {
 
     private let socketServer = SocketServer()
     private let overlayManager = MenuBarOverlayManager()
-    private let audioManager = AudioManager.shared
     private let shortcutManager = GlobalShortcutManager.shared
 
     private init() {}
@@ -57,7 +56,6 @@ class MuteStateManager: ObservableObject {
         case "state_update":
             if let muted = message["muted"] as? Bool {
                 updateState(muted: muted)
-                audioManager.setSystemMicMute(muted)
             }
         default:
             NSLog("MacMute: Unknown message type: \(type)")
