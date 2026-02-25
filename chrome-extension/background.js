@@ -40,6 +40,14 @@ function handleNativeMessage(message) {
       sendToMeetTabs({ type: "get_state" });
       break;
 
+    case "toggle_camera":
+      sendToMeetTabs({ type: "toggle_camera" });
+      break;
+
+    case "get_camera_state":
+      sendToMeetTabs({ type: "get_camera_state" });
+      break;
+
     default:
       console.log("MacMute: Unknown message type:", message.type);
   }
@@ -75,8 +83,9 @@ function sendToMeetTabs(message) {
   });
 }
 
-// Track mute state reported by content scripts
+// Track mic and camera state reported by content scripts
 let lastKnownMuted = false;
+let lastKnownCameraActive = true; // true = camera on
 
 // Listen for messages from content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -86,20 +95,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (port) {
       port.postMessage({ type: "state_update", muted: message.muted });
     }
+  } else if (message.type === "camera_state_update") {
+    console.log("MacMute: Camera state update from content script:", message.active);
+    lastKnownCameraActive = message.active;
+    if (port) {
+      port.postMessage({ type: "camera_state_update", active: message.active });
+    }
   }
   return false;
 });
 
-// Unmute when no active Meet tabs remain (closed or suspended)
+// Unmute mic and re-enable camera when no active Meet tabs remain (closed or suspended)
 function checkNoMeetTabsLeft() {
-  if (!lastKnownMuted) return;
-
   chrome.tabs.query({ url: "https://meet.google.com/*" }, (tabs) => {
     if (tabs.length === 0) {
-      console.log("MacMute: No active Meet tabs remain, sending unmute");
-      lastKnownMuted = false;
-      if (port) {
-        port.postMessage({ type: "state_update", muted: false });
+      if (lastKnownMuted) {
+        console.log("MacMute: No active Meet tabs remain, sending unmute");
+        lastKnownMuted = false;
+        if (port) {
+          port.postMessage({ type: "state_update", muted: false });
+        }
+      }
+      if (!lastKnownCameraActive) {
+        console.log("MacMute: No active Meet tabs remain, restoring camera state");
+        lastKnownCameraActive = true;
+        if (port) {
+          port.postMessage({ type: "camera_state_update", active: true });
+        }
       }
     }
   });

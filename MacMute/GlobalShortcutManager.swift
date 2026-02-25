@@ -5,13 +5,22 @@ class GlobalShortcutManager {
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+
+    // Mic shortcut
     private var targetKeyCode: UInt16 = 0
     private var targetModifiers: CGEventFlags = []
     private var isConfigured = false
     var onShortcutTriggered: (() -> Void)?
 
+    // Camera shortcut
+    private var cameraKeyCode: UInt16 = 0
+    private var cameraModifiers: CGEventFlags = []
+    private var isCameraConfigured = false
+    var onCameraShortcutTriggered: (() -> Void)?
+
     private init() {
         loadShortcut()
+        loadCameraShortcut()
     }
 
     func start() {
@@ -84,25 +93,46 @@ class GlobalShortcutManager {
         loadShortcut()
     }
 
+    func updateCameraShortcut() {
+        loadCameraShortcut()
+    }
+
     private func loadShortcut() {
         let keyCode = UserDefaults.standard.integer(forKey: "shortcutKeyCode")
         let modifiersRaw = UserDefaults.standard.integer(forKey: "shortcutModifiers")
 
         if keyCode != 0 && modifiersRaw != 0 {
             targetKeyCode = UInt16(keyCode)
-            // Convert NSEvent modifier flags to CGEventFlags
-            let nsFlags = NSEvent.ModifierFlags(rawValue: UInt(modifiersRaw))
-            var cgFlags: CGEventFlags = []
-            if nsFlags.contains(.command) { cgFlags.insert(.maskCommand) }
-            if nsFlags.contains(.control) { cgFlags.insert(.maskControl) }
-            if nsFlags.contains(.option) { cgFlags.insert(.maskAlternate) }
-            if nsFlags.contains(.shift) { cgFlags.insert(.maskShift) }
-            targetModifiers = cgFlags
+            targetModifiers = cgFlags(from: modifiersRaw)
             isConfigured = true
-            NSLog("MacMute: Shortcut configured - keyCode: \(targetKeyCode)")
+            NSLog("MacMute: Mic shortcut configured - keyCode: \(targetKeyCode)")
         } else {
             isConfigured = false
         }
+    }
+
+    private func loadCameraShortcut() {
+        let keyCode = UserDefaults.standard.integer(forKey: "cameraShortcutKeyCode")
+        let modifiersRaw = UserDefaults.standard.integer(forKey: "cameraShortcutModifiers")
+
+        if keyCode != 0 && modifiersRaw != 0 {
+            cameraKeyCode = UInt16(keyCode)
+            cameraModifiers = cgFlags(from: modifiersRaw)
+            isCameraConfigured = true
+            NSLog("MacMute: Camera shortcut configured - keyCode: \(cameraKeyCode)")
+        } else {
+            isCameraConfigured = false
+        }
+    }
+
+    private func cgFlags(from modifiersRaw: Int) -> CGEventFlags {
+        let nsFlags = NSEvent.ModifierFlags(rawValue: UInt(modifiersRaw))
+        var cgFlags: CGEventFlags = []
+        if nsFlags.contains(.command) { cgFlags.insert(.maskCommand) }
+        if nsFlags.contains(.control) { cgFlags.insert(.maskControl) }
+        if nsFlags.contains(.option) { cgFlags.insert(.maskAlternate) }
+        if nsFlags.contains(.shift) { cgFlags.insert(.maskShift) }
+        return cgFlags
     }
 
     private func handleEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
@@ -113,22 +143,33 @@ class GlobalShortcutManager {
             return Unmanaged.passRetained(event)
         }
 
-        guard isConfigured, type == .keyDown else {
+        guard type == .keyDown else {
             return Unmanaged.passRetained(event)
         }
 
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
         let flags = event.flags
-
         let relevantFlags: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate, .maskShift]
         let pressedModifiers = flags.intersection(relevantFlags)
-        let requiredModifiers = targetModifiers.intersection(relevantFlags)
 
-        if keyCode == targetKeyCode && pressedModifiers == requiredModifiers {
-            DispatchQueue.main.async { [weak self] in
-                self?.onShortcutTriggered?()
+        if isConfigured {
+            let requiredModifiers = targetModifiers.intersection(relevantFlags)
+            if keyCode == targetKeyCode && pressedModifiers == requiredModifiers {
+                DispatchQueue.main.async { [weak self] in
+                    self?.onShortcutTriggered?()
+                }
+                return nil // Consume the event
             }
-            return nil // Consume the event
+        }
+
+        if isCameraConfigured {
+            let requiredModifiers = cameraModifiers.intersection(relevantFlags)
+            if keyCode == cameraKeyCode && pressedModifiers == requiredModifiers {
+                DispatchQueue.main.async { [weak self] in
+                    self?.onCameraShortcutTriggered?()
+                }
+                return nil // Consume the event
+            }
         }
 
         return Unmanaged.passRetained(event)
