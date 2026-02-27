@@ -25,7 +25,7 @@ cp -R ~/Library/Developer/Xcode/DerivedData/MacMute-*/Build/Products/Release/Mac
 Or build and install in one step:
 
 ```bash
-xcodebuild -project MacMute.xcodeproj -scheme MacMute -configuration Release build && \
+xcodebuild -project MacMute.xcodeproj -scheme MacMute -configuration Release clean build && \
 cp -R ~/Library/Developer/Xcode/DerivedData/MacMute-*/Build/Products/Release/MacMute.app /Applications/
 ```
 
@@ -38,10 +38,10 @@ cp -R ~/Library/Developer/Xcode/DerivedData/MacMute-*/Build/Products/Release/Mac
 
 ## Update
 
-After making changes, rebuild and overwrite:
+After making changes, rebuild and overwrite. Use `clean build` to avoid stale cached artifacts:
 
 ```bash
-xcodebuild -project MacMute.xcodeproj -scheme MacMute -configuration Release build && \
+xcodebuild -project MacMute.xcodeproj -scheme MacMute -configuration Release clean build && \
 cp -R ~/Library/Developer/Xcode/DerivedData/MacMute-*/Build/Products/Release/MacMute.app /Applications/
 ```
 
