@@ -12,9 +12,13 @@ class StatusBarController {
         self.popover = NSPopover()
 
         let contentView = ShortcutConfigView(muteStateManager: muteStateManager)
-        popover.contentSize = NSSize(width: 300, height: 250)
+        let hostingController = NSHostingController(rootView: contentView)
+        // Set contentSize upfront so macOS positions the popover correctly below the menu bar.
+        // Without this, macOS may flip the popover above the button (off-screen).
+        let naturalSize = hostingController.sizeThatFits(in: CGSize(width: 280, height: CGFloat.greatestFiniteMagnitude))
+        popover.contentSize = naturalSize
         popover.behavior = .transient
-        popover.contentViewController = NSHostingController(rootView: contentView)
+        popover.contentViewController = hostingController
 
         if let button = statusItem.button {
             button.image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: "MacMute")
@@ -35,6 +39,22 @@ class StatusBarController {
             popover.performClose(nil)
         } else if let button = statusItem.button {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            DispatchQueue.main.async { [weak self] in
+                self?.constrainPopoverToScreen()
+            }
+        }
+    }
+
+    private func constrainPopoverToScreen() {
+        guard let popoverWindow = popover.contentViewController?.view.window,
+              let screen = popoverWindow.screen ?? NSScreen.main else { return }
+
+        var frame = popoverWindow.frame
+        let topBound = screen.visibleFrame.maxY
+
+        if frame.maxY > topBound {
+            frame.origin.y = topBound - frame.height
+            popoverWindow.setFrameOrigin(frame.origin)
         }
     }
 

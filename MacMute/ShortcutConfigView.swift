@@ -4,20 +4,21 @@ struct ShortcutConfigView: View {
     @ObservedObject var muteStateManager: MuteStateManager
     @State private var isRecordingMic = false
     @State private var isRecordingCamera = false
+    @State private var showColorSettings = false
 
     var body: some View {
         VStack(spacing: 12) {
             // Mic status
             StatusRow(
                 icon: muteStateManager.isMuted ? "mic.slash.fill" : "mic.fill",
-                color: muteStateManager.isMuted ? .red : .green,
+                color: muteStateManager.isMuted ? muteStateManager.micMutedColor : .green,
                 label: muteStateManager.isMuted ? "Microphone Muted" : "Microphone Active"
             )
 
             // Camera status
             StatusRow(
                 icon: muteStateManager.isCameraOff ? "video.slash.fill" : "video.fill",
-                color: muteStateManager.isCameraOff ? .blue : .green,
+                color: muteStateManager.isCameraOff ? muteStateManager.cameraOffColor : .green,
                 label: muteStateManager.isCameraOff ? "Camera Off" : "Camera Active"
             )
 
@@ -37,7 +38,7 @@ struct ShortcutConfigView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
-            .tint(.red)
+            .tint(muteStateManager.micMutedColor)
             .controlSize(.regular)
 
             Divider()
@@ -56,10 +57,24 @@ struct ShortcutConfigView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
-            .tint(.blue)
+            .tint(muteStateManager.cameraOffColor)
             .controlSize(.regular)
 
-            Spacer()
+            Divider()
+
+            DisclosureGroup("Color Settings", isExpanded: $showColorSettings) {
+                ColorPickerRow(
+                    label: "Mic muted color",
+                    selectedColor: $muteStateManager.micMutedColor
+                )
+                ColorPickerRow(
+                    label: "Camera off color",
+                    selectedColor: $muteStateManager.cameraOffColor
+                )
+                .padding(.top, 4)
+            }
+
+            Divider()
 
             // Quit button
             Button("Quit MacMute") {
@@ -67,10 +82,10 @@ struct ShortcutConfigView: View {
             }
             .buttonStyle(.plain)
             .foregroundColor(.secondary)
-            .padding(.bottom, 4)
         }
         .padding()
-        .frame(width: 280, height: 370)
+        .frame(width: 280)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func startRecordingMic() {
@@ -142,6 +157,39 @@ private struct StatusRow: View {
                 .foregroundColor(color)
             Text(label)
                 .font(.headline)
+        }
+        .padding(.top, 4)
+    }
+}
+
+private struct ColorPickerRow: View {
+    let label: String
+    @Binding var selectedColor: Color
+
+    private let presets: [Color] = [.red, .orange, .yellow, .green, .teal, .blue, .purple, .pink]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            HStack(spacing: 6) {
+                ForEach(presets, id: \.self) { preset in
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(preset)
+                        .frame(width: 20, height: 18)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4).stroke(Color.primary.opacity(0.8), lineWidth: 2)
+                                .opacity(selectedColor == preset ? 1 : 0)
+                        )
+                        .onTapGesture { selectedColor = preset }
+                }
+                ColorPicker("", selection: $selectedColor)
+                    .labelsHidden()
+                    .frame(width: 24, height: 24)
+                    .padding(.leading, 2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.top, 4)
     }

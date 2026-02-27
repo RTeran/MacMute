@@ -4,18 +4,25 @@ class MenuBarOverlayManager {
     private var overlayWindows: [NSWindow] = []
     private let extraHeight: CGFloat = 10
 
-    func updateOverlay(micMuted: Bool, cameraOff: Bool) {
+    func updateOverlay(
+        micMuted: Bool,
+        cameraOff: Bool,
+        micColor: NSColor = NSColor.red.withAlphaComponent(0.7),
+        cameraColor: NSColor = NSColor.systemBlue.withAlphaComponent(0.7)
+    ) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             if micMuted || cameraOff {
-                self.showOverlays(micMuted: micMuted, cameraOff: cameraOff)
+                self.showOverlays(micMuted: micMuted, cameraOff: cameraOff,
+                                  micColor: micColor, cameraColor: cameraColor)
             } else {
                 self.hideOverlays()
             }
         }
     }
 
-    private func showOverlays(micMuted: Bool, cameraOff: Bool) {
+    private func showOverlays(micMuted: Bool, cameraOff: Bool,
+                              micColor: NSColor, cameraColor: NSColor) {
         // Rebuild overlays when state changes
         let windows = overlayWindows
         overlayWindows = []
@@ -53,23 +60,23 @@ class MenuBarOverlayManager {
             contentView.wantsLayer = true
 
             if micMuted && cameraOff {
-                // Split: left half red (mic), right half blue (camera)
+                // Split: left half mic color, right half camera color
                 let halfWidth = overlayFrame.width / 2
 
                 let micView = NSView(frame: NSRect(x: 0, y: 0, width: halfWidth, height: overlayFrame.height))
                 micView.wantsLayer = true
-                micView.layer?.backgroundColor = NSColor.red.withAlphaComponent(0.7).cgColor
+                micView.layer?.backgroundColor = micColor.cgColor
 
                 let cameraView = NSView(frame: NSRect(x: halfWidth, y: 0, width: halfWidth, height: overlayFrame.height))
                 cameraView.wantsLayer = true
-                cameraView.layer?.backgroundColor = NSColor.systemBlue.withAlphaComponent(0.7).cgColor
+                cameraView.layer?.backgroundColor = cameraColor.cgColor
 
                 contentView.addSubview(micView)
                 contentView.addSubview(cameraView)
             } else if micMuted {
-                contentView.layer?.backgroundColor = NSColor.red.withAlphaComponent(0.7).cgColor
+                contentView.layer?.backgroundColor = micColor.cgColor
             } else {
-                contentView.layer?.backgroundColor = NSColor.systemBlue.withAlphaComponent(0.7).cgColor
+                contentView.layer?.backgroundColor = cameraColor.cgColor
             }
 
             window.contentView = contentView

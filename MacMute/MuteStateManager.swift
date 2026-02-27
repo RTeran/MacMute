@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import SwiftUI
 
 extension Notification.Name {
     static let muteStateDidChange = Notification.Name("muteStateDidChange")
@@ -12,11 +13,27 @@ class MuteStateManager: ObservableObject {
     @Published var isMuted: Bool = false
     @Published var isCameraOff: Bool = false
 
+    @Published var micMutedColor: Color = .red {
+        didSet {
+            saveColor(micMutedColor, forKey: "micMutedColorData")
+            refreshOverlayIfVisible()
+        }
+    }
+    @Published var cameraOffColor: Color = .blue {
+        didSet {
+            saveColor(cameraOffColor, forKey: "cameraOffColorData")
+            refreshOverlayIfVisible()
+        }
+    }
+
     private let socketServer = SocketServer()
     private let overlayManager = MenuBarOverlayManager()
     private let shortcutManager = GlobalShortcutManager.shared
 
-    private init() {}
+    private init() {
+        micMutedColor = loadColor(forKey: "micMutedColorData", default: .red)
+        cameraOffColor = loadColor(forKey: "cameraOffColorData", default: .blue)
+    }
 
     func start() {
         // Setup socket server
@@ -87,7 +104,12 @@ class MuteStateManager: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.isMuted = muted
-            self.overlayManager.updateOverlay(micMuted: self.isMuted, cameraOff: self.isCameraOff)
+            self.overlayManager.updateOverlay(
+                micMuted: self.isMuted,
+                cameraOff: self.isCameraOff,
+                micColor: NSColor(self.micMutedColor).withAlphaComponent(0.7),
+                cameraColor: NSColor(self.cameraOffColor).withAlphaComponent(0.7)
+            )
             NotificationCenter.default.post(name: .muteStateDidChange, object: nil)
         }
     }
@@ -96,8 +118,41 @@ class MuteStateManager: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.isCameraOff = !active
-            self.overlayManager.updateOverlay(micMuted: self.isMuted, cameraOff: self.isCameraOff)
+            self.overlayManager.updateOverlay(
+                micMuted: self.isMuted,
+                cameraOff: self.isCameraOff,
+                micColor: NSColor(self.micMutedColor).withAlphaComponent(0.7),
+                cameraColor: NSColor(self.cameraOffColor).withAlphaComponent(0.7)
+            )
             NotificationCenter.default.post(name: .cameraStateDidChange, object: nil)
         }
+    }
+
+    private func refreshOverlayIfVisible() {
+        guard isMuted || isCameraOff else { return }
+        overlayManager.updateOverlay(
+            micMuted: isMuted,
+            cameraOff: isCameraOff,
+            micColor: NSColor(micMutedColor).withAlphaComponent(0.7),
+            cameraColor: NSColor(cameraOffColor).withAlphaComponent(0.7)
+        )
+    }
+
+    private func saveColor(_ color: Color, forKey key: String) {
+        let nsColor = NSColor(color)
+        if let data = try? NSKeyedArchiver.archivedData(
+            withRootObject: nsColor, requiringSecureCoding: false
+        ) {
+            UserDefaults.standard.set(data, forKey: key)
+        }
+    }
+
+    private func loadColor(forKey key: String, default defaultColor: Color) -> Color {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let nsColor = try? NSKeyedUnarchiver.unarchivedObject(
+                  ofClass: NSColor.self, from: data
+              )
+        else { return defaultColor }
+        return Color(nsColor: nsColor)
     }
 }
