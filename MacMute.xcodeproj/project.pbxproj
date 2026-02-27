@@ -18,6 +18,7 @@
 		A1000009 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000011 /* main.swift */; };
 		A1000020 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000020 /* main.swift */; };
 		A1000030 /* MacMuteHelper in CopyFiles */ = {isa = PBXBuildFile; fileRef = A3000020 /* MacMuteHelper */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		A1000040 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A2000040 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -33,6 +34,17 @@
 		};
 /* End PBXCopyFilesBuildPhase section */
 
+/* Begin PBXResourcesBuildPhase section */
+		A8000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1000040 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		A2000001 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		A2000002 /* StatusBarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusBarController.swift; sourceTree = "<group>"; };
@@ -45,6 +57,7 @@
 		A2000009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A2000010 /* MacMute.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MacMute.entitlements; sourceTree = "<group>"; };
 		A2000011 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		A2000040 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A2000020 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		A3000010 /* MacMute.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MacMute.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A3000020 /* MacMuteHelper */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = MacMuteHelper; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -91,6 +104,7 @@
 				A2000011 /* main.swift */,
 				A2000009 /* Info.plist */,
 				A2000010 /* MacMute.entitlements */,
+				A2000040 /* Assets.xcassets */,
 			);
 			path = MacMute;
 			sourceTree = "<group>";
@@ -122,6 +136,7 @@
 				A8000001 /* Sources */,
 				A4000001 /* Frameworks */,
 				A5000001 /* CopyFiles */,
+				A8000003 /* Resources */,
 			);
 			buildRules = (
 			);
