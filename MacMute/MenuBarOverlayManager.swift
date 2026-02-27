@@ -2,7 +2,6 @@ import Cocoa
 
 class MenuBarOverlayManager {
     private var overlayWindows: [NSWindow] = []
-    private let extraHeight: CGFloat = 10
 
     func updateOverlay(
         micMuted: Bool,
@@ -23,23 +22,15 @@ class MenuBarOverlayManager {
 
     private func showOverlays(micMuted: Bool, cameraOff: Bool,
                               micColor: NSColor, cameraColor: NSColor) {
-        // Rebuild overlays when state changes
         let windows = overlayWindows
         overlayWindows = []
         for window in windows {
             window.orderOut(nil)
         }
 
-        let menuBarHeight = NSStatusBar.system.thickness + extraHeight
-
         for screen in NSScreen.screens {
-            let screenFrame = screen.frame
-            let overlayFrame = NSRect(
-                x: screenFrame.origin.x,
-                y: screenFrame.origin.y + screenFrame.height - menuBarHeight,
-                width: screenFrame.width,
-                height: menuBarHeight
-            )
+            let overlayFrame = screen.frame
+            let builtIn = isBuiltInDisplay(screen)
 
             let window = NSWindow(
                 contentRect: overlayFrame,
@@ -56,30 +47,11 @@ class MenuBarOverlayManager {
             window.alphaValue = 0
             window.backgroundColor = .clear
 
-            let contentView = NSView(frame: NSRect(origin: .zero, size: overlayFrame.size))
-            contentView.wantsLayer = true
-
-            if micMuted && cameraOff {
-                // Split: left half mic color, right half camera color
-                let halfWidth = overlayFrame.width / 2
-
-                let micView = NSView(frame: NSRect(x: 0, y: 0, width: halfWidth, height: overlayFrame.height))
-                micView.wantsLayer = true
-                micView.layer?.backgroundColor = micColor.cgColor
-
-                let cameraView = NSView(frame: NSRect(x: halfWidth, y: 0, width: halfWidth, height: overlayFrame.height))
-                cameraView.wantsLayer = true
-                cameraView.layer?.backgroundColor = cameraColor.cgColor
-
-                contentView.addSubview(micView)
-                contentView.addSubview(cameraView)
-            } else if micMuted {
-                contentView.layer?.backgroundColor = micColor.cgColor
-            } else {
-                contentView.layer?.backgroundColor = cameraColor.cgColor
-            }
-
-            window.contentView = contentView
+            let borderView = ScreenBorderView(frame: NSRect(origin: .zero, size: overlayFrame.size))
+            borderView.configure(micMuted: micMuted, cameraOff: cameraOff,
+                                 micColor: micColor, cameraColor: cameraColor,
+                                 roundTopCorners: builtIn)
+            window.contentView = borderView
             window.orderFrontRegardless()
 
             NSAnimationContext.runAnimationGroup { context in
@@ -103,5 +75,96 @@ class MenuBarOverlayManager {
                 window.orderOut(nil)
             })
         }
+    }
+
+    private func isBuiltInDisplay(_ screen: NSScreen) -> Bool {
+        guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+            return false
+        }
+        return CGDisplayIsBuiltin(CGDirectDisplayID(number.uint32Value)) != 0
+    }
+}
+
+// Profundidad del degradado como porcentaje del alto de la pantalla
+private let gradientDepthRatio: CGFloat = 0.03
+
+// Radio de las esquinas superiores en la pantalla built-in del MacBook
+private let builtInCornerRadius: CGFloat = 12
+
+private class ScreenBorderView: NSView {
+    private var micColor: NSColor = .red
+    private var cameraColor: NSColor = .blue
+    private var showMic = false
+    private var showCamera = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+    }
+
+    func configure(micMuted: Bool, cameraOff: Bool,
+                   micColor: NSColor, cameraColor: NSColor,
+                   roundTopCorners: Bool) {
+        self.micColor = micColor
+        self.cameraColor = cameraColor
+        self.showMic = micMuted
+        self.showCamera = cameraOff
+
+        if roundTopCorners {
+            // layerMinXMaxYCorner = top-left, layerMaxXMaxYCorner = top-right
+            // (NSView no-flipped: max Y = top of view)
+            layer?.cornerRadius = builtInCornerRadius
+            layer?.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+            layer?.masksToBounds = true
+        } else {
+            layer?.cornerRadius = 0
+            layer?.masksToBounds = false
+        }
+
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        // Fondo completamente transparente
+        NSColor.clear.setFill()
+        NSBezierPath.fill(bounds)
+
+        let d = bounds.height * gradientDepthRatio
+        let w = bounds.width
+        let h = bounds.height
+        let half = w / 2
+
+        if showMic && showCamera {
+            // Borde superior: mitad izquierda mic, mitad derecha cámara
+            drawGradient(micColor,    rect: NSRect(x: 0,    y: h - d, width: half,    height: d), angle: 270)
+            drawGradient(cameraColor, rect: NSRect(x: half, y: h - d, width: w - half, height: d), angle: 270)
+            // Borde inferior: mitad izquierda mic, mitad derecha cámara
+            drawGradient(micColor,    rect: NSRect(x: 0,    y: 0, width: half,    height: d), angle: 90)
+            drawGradient(cameraColor, rect: NSRect(x: half, y: 0, width: w - half, height: d), angle: 90)
+            // Borde lateral izquierdo: mic (alto total)
+            drawGradient(micColor,    rect: NSRect(x: 0,    y: 0, width: d, height: h), angle: 0)
+            // Borde lateral derecho: cámara (alto total)
+            drawGradient(cameraColor, rect: NSRect(x: w - d, y: 0, width: d, height: h), angle: 180)
+        } else {
+            let color = showMic ? micColor : cameraColor
+            drawGradient(color, rect: NSRect(x: 0,    y: h - d, width: w, height: d), angle: 270) // superior
+            drawGradient(color, rect: NSRect(x: 0,    y: 0,     width: w, height: d), angle: 90)  // inferior
+            drawGradient(color, rect: NSRect(x: 0,    y: 0,     width: d, height: h), angle: 0)   // izquierdo
+            drawGradient(color, rect: NSRect(x: w - d, y: 0,    width: d, height: h), angle: 180) // derecho
+        }
+    }
+
+    // Dibuja un gradiente de `color` → transparente en `rect`.
+    // angle=0: color a izquierda; 90: color abajo; 180: color a derecha; 270: color arriba.
+    private func drawGradient(_ color: NSColor, rect: NSRect, angle: CGFloat) {
+        guard let gradient = NSGradient(starting: color, ending: .clear) else { return }
+        gradient.draw(in: rect, angle: angle)
     }
 }
