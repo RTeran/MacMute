@@ -44,6 +44,7 @@ class MenuBarOverlayManager {
             window.ignoresMouseEvents = true
             window.collectionBehavior = [.canJoinAllSpaces, .stationary]
             window.hasShadow = false
+            window.sharingType = .none
             window.alphaValue = 0
             window.backgroundColor = .clear
 
