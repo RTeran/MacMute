@@ -105,42 +105,77 @@
     return null;
   }
 
-  function toggleMute() {
-    const button = findMuteButton();
-    if (!button) {
-      console.log("MacMute: Mute button not found");
-      return;
-    }
+  // Shorter than the app's confirmation timeout so the answer reaches the app in time,
+  // even though Chrome aligns timers in hidden tabs to ~1 s.
+  const STATE_CHANGE_TIMEOUT_MS = 1200;
 
-    button.click();
+  const STATE_OBSERVER_OPTIONS = {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["data-is-muted", "aria-label", "aria-pressed"],
+  };
 
-    // Read new state after a short delay
-    setTimeout(() => {
-      const newState = getMuteState();
-      if (newState !== null) {
-        currentMuteState = newState;
-        sendStateUpdate(newState);
+  function toggleControl(target, findButton, readState, timeoutMs) {
+    return new Promise((resolve) => {
+      const startedAt = Date.now();
+      const visibility = document.visibilityState;
+
+      function finish(result) {
+        const fullResult = { ...result, visibility, elapsedMs: Date.now() - startedAt };
+        console.debug(`MacMute: ${target} toggle result`, fullResult);
+        resolve(fullResult);
       }
-    }, 200);
+
+      const button = findButton();
+      if (!button) {
+        finish({ ok: false, reason: "button_not_found", before: null, after: null });
+        return;
+      }
+
+      const before = readState();
+      if (before === null) {
+        finish({ ok: false, reason: "state_unknown", before: null, after: null });
+        return;
+      }
+
+      let settled = false;
+      let timer = null;
+      const observer = new MutationObserver(checkFlip);
+
+      function settle(result) {
+        if (settled) return;
+        settled = true;
+        observer.disconnect();
+        clearTimeout(timer);
+        finish(result);
+      }
+
+      function checkFlip() {
+        const after = readState();
+        if (after !== null && after !== before) {
+          settle({ ok: true, before, after });
+        }
+      }
+
+      observer.observe(document.body, STATE_OBSERVER_OPTIONS);
+      timer = setTimeout(() => {
+        checkFlip();
+        settle({ ok: false, reason: "timeout", before, after: readState() });
+      }, timeoutMs);
+
+      console.debug(`MacMute: ${target} click`, { before, visibility, at: startedAt });
+      button.click();
+      checkFlip();
+    });
   }
 
-  function toggleCamera() {
-    const button = findCameraButton();
-    if (!button) {
-      console.log("MacMute: Camera button not found");
-      return;
-    }
+  function toggleMute(timeoutMs = STATE_CHANGE_TIMEOUT_MS) {
+    return toggleControl("mic", findMuteButton, getMuteState, timeoutMs);
+  }
 
-    button.click();
-
-    // Read new state after a short delay
-    setTimeout(() => {
-      const newState = getCameraState();
-      if (newState !== null) {
-        currentCameraState = newState;
-        sendCameraStateUpdate(newState);
-      }
-    }, 200);
+  function toggleCamera(timeoutMs = STATE_CHANGE_TIMEOUT_MS) {
+    return toggleControl("camera", findCameraButton, getCameraState, timeoutMs);
   }
 
   function sendStateUpdate(muted) {
@@ -155,8 +190,8 @@
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message.type) {
       case "toggle":
-        toggleMute();
-        break;
+        toggleMute().then(sendResponse);
+        return true;
 
       case "get_state":
         const state = getMuteState();
@@ -167,8 +202,8 @@
         break;
 
       case "toggle_camera":
-        toggleCamera();
-        break;
+        toggleCamera().then(sendResponse);
+        return true;
 
       case "get_camera_state":
         const cameraState = getCameraState();
@@ -198,12 +233,7 @@
 
   // Start observing once the page is ready
   function startObserving() {
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["data-is-muted", "aria-label", "aria-pressed"],
-    });
+    observer.observe(document.body, STATE_OBSERVER_OPTIONS);
 
     // Report initial state
     const initialMuteState = getMuteState();
@@ -241,6 +271,7 @@
       toggleCamera,
       sendCameraStateUpdate,
       CAMERA_BUTTON_SELECTORS,
+      STATE_CHANGE_TIMEOUT_MS,
       _getObserver: () => observer,
       _getState: () => ({ currentMuteState, currentCameraState }),
       _setState: (s) => {

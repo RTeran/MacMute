@@ -177,63 +177,86 @@ describe("sendStateUpdate", () => {
 describe("toggleMute", () => {
   beforeEach(() => {
     jest.useFakeTimers();
+    jest.spyOn(console, "debug").mockImplementation(() => {});
   });
 
   afterEach(() => {
     jest.useRealTimers();
+    console.debug.mockRestore();
   });
 
-  test("logs and does nothing when no mute button is found", () => {
-    const consoleSpy = jest
-      .spyOn(console, "log")
-      .mockImplementation(() => {});
-    script.toggleMute();
-    jest.runAllTimers();
-    expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Mute button not found")
+  test("resolves ok with before/after when the mute state flips after the click", async () => {
+    document.body.innerHTML = '<button data-is-muted="false"></button>';
+    const btn = document.querySelector("[data-is-muted]");
+    btn.addEventListener("click", () => btn.setAttribute("data-is-muted", "true"));
+
+    const result = await script.toggleMute();
+
+    expect(result).toEqual(expect.objectContaining({ ok: true, before: false, after: true }));
+  });
+
+  test("waits for a late DOM update before resolving ok", async () => {
+    document.body.innerHTML = '<button data-is-muted="false"></button>';
+    const btn = document.querySelector("[data-is-muted]");
+    btn.addEventListener("click", () => {
+      setTimeout(() => btn.setAttribute("data-is-muted", "true"), 800);
+    });
+
+    const pending = script.toggleMute();
+    jest.advanceTimersByTime(800);
+    const result = await pending;
+
+    expect(result).toEqual(expect.objectContaining({ ok: true, before: false, after: true }));
+  });
+
+  test("resolves timeout with the unchanged state when the DOM never flips", async () => {
+    document.body.innerHTML = '<button data-is-muted="false"></button>';
+
+    const pending = script.toggleMute();
+    jest.advanceTimersByTime(script.STATE_CHANGE_TIMEOUT_MS);
+    const result = await pending;
+
+    expect(result).toEqual(
+      expect.objectContaining({ ok: false, reason: "timeout", before: false, after: false })
     );
-    consoleSpy.mockRestore();
   });
 
-  test("clicks the mute button", () => {
+  test("does not report the unchanged state as a state_update after a timeout", async () => {
+    script._setState({ currentMuteState: false });
     document.body.innerHTML = '<button data-is-muted="false"></button>';
-    const btn = document.querySelector("[data-is-muted]");
-    const clickSpy = jest.spyOn(btn, "click");
-    script.toggleMute();
-    expect(clickSpy).toHaveBeenCalledTimes(1);
-  });
 
-  test("after 200ms delay reads new state and calls sendStateUpdate", () => {
-    document.body.innerHTML = '<button data-is-muted="false"></button>';
-    const btn = document.querySelector("[data-is-muted]");
-    // Simulate the DOM change that Meet would do on click
-    btn.addEventListener("click", () => {
-      btn.setAttribute("data-is-muted", "true");
-    });
+    const pending = script.toggleMute();
+    jest.advanceTimersByTime(script.STATE_CHANGE_TIMEOUT_MS);
+    await pending;
 
-    script.toggleMute();
     expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
-
-    jest.advanceTimersByTime(200);
-    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({
-      type: "state_update",
-      muted: true,
-    });
   });
 
-  test("does not call sendStateUpdate if getMuteState returns null after toggle", () => {
+  test("resolves button_not_found without clicking anything when there is no mute button", async () => {
+    const result = await script.toggleMute();
+
+    expect(result).toEqual(expect.objectContaining({ ok: false, reason: "button_not_found" }));
+  });
+
+  test("resolves state_unknown when the current mute state cannot be read", async () => {
+    document.body.innerHTML = '<button aria-label="microphone settings"></button>';
+    const clickSpy = jest.spyOn(document.querySelector("button"), "click");
+
+    const result = await script.toggleMute();
+
+    expect(result).toEqual(expect.objectContaining({ ok: false, reason: "state_unknown" }));
+    expect(clickSpy).not.toHaveBeenCalled();
+  });
+
+  test("reports the page visibility with the result", async () => {
     document.body.innerHTML = '<button data-is-muted="false"></button>';
     const btn = document.querySelector("[data-is-muted]");
-    // Button disappears after click (page transition mid-meeting)
-    btn.addEventListener("click", () => {
-      btn.removeAttribute("data-is-muted");
-      btn.removeAttribute("aria-label");
-    });
+    btn.addEventListener("click", () => btn.setAttribute("data-is-muted", "true"));
+    jest.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
 
-    script.toggleMute();
-    jest.advanceTimersByTime(200);
-    expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
+    const result = await script.toggleMute();
+
+    expect(result.visibility).toBe("hidden");
   });
 });
 
@@ -280,8 +303,33 @@ describe("message listener", () => {
     expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
   });
 
-  test("returns false to keep message channel synchronous", () => {
+  test("answers 'toggle' through sendResponse with the confirmed result", async () => {
+    jest.spyOn(console, "debug").mockImplementation(() => {});
+    document.body.innerHTML = '<button data-is-muted="false"></button>';
+    const btn = document.querySelector("[data-is-muted]");
+    btn.addEventListener("click", () => btn.setAttribute("data-is-muted", "true"));
+    const sendResponse = jest.fn();
+
+    getListener()({ type: "toggle" }, {}, sendResponse);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(sendResponse).toHaveBeenCalledTimes(1);
+    expect(sendResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ ok: true, before: false, after: true })
+    );
+    console.debug.mockRestore();
+  });
+
+  test("returns true for 'toggle' to keep the channel open for the async answer", () => {
+    jest.spyOn(console, "debug").mockImplementation(() => {});
     const result = getListener()({ type: "toggle" }, {}, () => {});
+    expect(result).toBe(true);
+    console.debug.mockRestore();
+  });
+
+  test("returns false for 'get_state'", () => {
+    const result = getListener()({ type: "get_state" }, {}, () => {});
     expect(result).toBe(false);
   });
 
@@ -454,49 +502,40 @@ describe("sendCameraStateUpdate", () => {
 describe("toggleCamera", () => {
   beforeEach(() => {
     jest.useFakeTimers();
+    jest.spyOn(console, "debug").mockImplementation(() => {});
   });
 
   afterEach(() => {
     jest.useRealTimers();
+    console.debug.mockRestore();
   });
 
-  test("logs and does nothing when no camera button is found", () => {
-    const consoleSpy = jest
-      .spyOn(console, "log")
-      .mockImplementation(() => {});
-    script.toggleCamera();
-    jest.runAllTimers();
-    expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Camera button not found")
-    );
-    consoleSpy.mockRestore();
-  });
-
-  test("clicks the camera button", () => {
+  test("resolves ok with before/after camera activity when the camera state flips", async () => {
     document.body.innerHTML = '<button aria-label="Turn off camera"></button>';
     const btn = document.querySelector("button");
-    const clickSpy = jest.spyOn(btn, "click");
-    script.toggleCamera();
-    expect(clickSpy).toHaveBeenCalledTimes(1);
+    btn.addEventListener("click", () => btn.setAttribute("aria-label", "Turn on camera"));
+
+    const result = await script.toggleCamera();
+
+    expect(result).toEqual(expect.objectContaining({ ok: true, before: true, after: false }));
   });
 
-  test("after 200ms delay reads new camera state and sends update", () => {
-    document.body.innerHTML =
-      '<button aria-label="Turn off camera"></button>';
-    const btn = document.querySelector("button");
-    btn.addEventListener("click", () => {
-      btn.setAttribute("aria-label", "Turn on camera");
-    });
+  test("resolves timeout when the camera state never flips", async () => {
+    document.body.innerHTML = '<button aria-label="Turn off camera"></button>';
 
-    script.toggleCamera();
-    expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
+    const pending = script.toggleCamera();
+    jest.advanceTimersByTime(script.STATE_CHANGE_TIMEOUT_MS);
+    const result = await pending;
 
-    jest.advanceTimersByTime(200);
-    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({
-      type: "camera_state_update",
-      active: false,
-    });
+    expect(result).toEqual(
+      expect.objectContaining({ ok: false, reason: "timeout", before: true, after: true })
+    );
+  });
+
+  test("resolves button_not_found when there is no camera button", async () => {
+    const result = await script.toggleCamera();
+
+    expect(result).toEqual(expect.objectContaining({ ok: false, reason: "button_not_found" }));
   });
 });
 
@@ -525,6 +564,24 @@ describe("message listener — camera", () => {
 
     getListener()({ type: "toggle_camera" }, {}, () => {});
     expect(clickSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test("answers 'toggle_camera' through sendResponse and returns true", async () => {
+    jest.spyOn(console, "debug").mockImplementation(() => {});
+    document.body.innerHTML = '<button aria-label="Turn on camera"></button>';
+    const btn = document.querySelector("button");
+    btn.addEventListener("click", () => btn.setAttribute("aria-label", "Turn off camera"));
+    const sendResponse = jest.fn();
+
+    const returned = getListener()({ type: "toggle_camera" }, {}, sendResponse);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(returned).toBe(true);
+    expect(sendResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ ok: true, before: false, after: true })
+    );
+    console.debug.mockRestore();
   });
 
   test("handles 'get_camera_state' message: sends camera state update when state is readable", () => {
