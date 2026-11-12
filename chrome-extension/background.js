@@ -37,7 +37,9 @@ const TOGGLE_TARGETS = { toggle: "mic", toggle_camera: "camera" };
 
 function postToNative(message) {
   if (!port) {
-    console.warn("MacMute: Native port not connected, dropping message", message);
+    // Passive updates are resent on the next change; a lost toggle_result is what the user notices.
+    const log = message.type === "toggle_result" ? console.warn : console.debug;
+    log("MacMute: Native port not connected, dropping message", message);
     return;
   }
   try {

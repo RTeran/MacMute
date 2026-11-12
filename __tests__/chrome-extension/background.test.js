@@ -251,6 +251,21 @@ describe("native port", () => {
     );
   });
 
+  test("logs dropped passive state updates at debug level only", () => {
+    jest.useFakeTimers();
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    port.onDisconnect.addListener.mock.calls[0][0]();
+    const onMessage = chrome.runtime.onMessage.addListener.mock.calls[0][0];
+
+    onMessage({ type: "state_update", muted: true }, {}, () => {});
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(console.debug).toHaveBeenCalledWith(
+      expect.stringContaining("Native port not connected"),
+      expect.objectContaining({ type: "state_update" })
+    );
+  });
+
   test("logs native_port_lost when posting to the native port throws", async () => {
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
     port.postMessage.mockImplementation(() => {
