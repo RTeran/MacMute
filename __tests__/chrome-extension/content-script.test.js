@@ -26,7 +26,8 @@ function stubMutationObserver() {
   const instances = [];
   const RealMutationObserver = global.MutationObserver;
   global.MutationObserver = class {
-    constructor() {
+    constructor(callback) {
+      this.callback = callback;
       this.observe = jest.fn();
       this.disconnect = jest.fn();
       instances.push(this);
@@ -368,6 +369,49 @@ describe("toggleMute", () => {
 
     expect(result).toEqual(expect.objectContaining({ ok: false, reason: "exception", error: "boom" }));
     expect(next.reason).toBe("exception");
+  });
+
+  test("resolves exception and frees the target when reading the state throws inside the timer", async () => {
+    const observerStub = stubMutationObserver();
+    try {
+      document.body.innerHTML = '<button data-is-muted="false"></button>';
+      await Promise.resolve();
+
+      const pending = script.toggleMute();
+      const querySpy = jest.spyOn(document, "querySelector").mockImplementation(() => {
+        throw new Error("detached");
+      });
+      jest.advanceTimersByTime(script.STATE_CHANGE_TIMEOUT_MS);
+      const result = await pending;
+      querySpy.mockRestore();
+      const next = script.toggleMute();
+      jest.advanceTimersByTime(script.STATE_CHANGE_TIMEOUT_MS);
+
+      expect(result).toEqual(expect.objectContaining({ ok: false, reason: "exception", error: "detached" }));
+      expect((await next).reason).toBe("timeout");
+    } finally {
+      observerStub.restore();
+    }
+  });
+
+  test("resolves exception when reading the state throws inside the mutation callback", async () => {
+    const observerStub = stubMutationObserver();
+    try {
+      document.body.innerHTML = '<button data-is-muted="false"></button>';
+      await Promise.resolve();
+
+      const pending = script.toggleMute();
+      const querySpy = jest.spyOn(document, "querySelector").mockImplementation(() => {
+        throw new Error("detached");
+      });
+      observerStub.instances[0].callback();
+      querySpy.mockRestore();
+      const result = await pending;
+
+      expect(result).toEqual(expect.objectContaining({ ok: false, reason: "exception", error: "detached" }));
+    } finally {
+      observerStub.restore();
+    }
   });
 
   test("reports the page visibility with the result", async () => {

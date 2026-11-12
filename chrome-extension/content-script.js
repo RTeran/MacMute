@@ -146,6 +146,16 @@
       }
       togglesInProgress.add(target);
 
+      const failWith = (error) =>
+        finish({ ok: false, reason: "exception", error: error?.message, before: null, after: null });
+      const guarded = (callback) => () => {
+        try {
+          callback();
+        } catch (error) {
+          failWith(error);
+        }
+      };
+
       try {
         const button = findButton();
         if (!button) {
@@ -166,18 +176,21 @@
           }
         };
 
-        observer = new MutationObserver(checkFlip);
+        observer = new MutationObserver(guarded(checkFlip));
         observer.observe(document.body, STATE_OBSERVER_OPTIONS);
-        timer = setTimeout(() => {
-          checkFlip();
-          finish({ ok: false, reason: "timeout", before, after: readState() });
-        }, timeoutMs);
+        timer = setTimeout(
+          guarded(() => {
+            checkFlip();
+            finish({ ok: false, reason: "timeout", before, after: readState() });
+          }),
+          timeoutMs
+        );
 
         console.debug(`MacMute: ${target} click`, { before, visibility, at: startedAt });
         button.click();
         checkFlip();
       } catch (error) {
-        finish({ ok: false, reason: "exception", error: error.message, before: null, after: null });
+        failWith(error);
       }
     });
   }
