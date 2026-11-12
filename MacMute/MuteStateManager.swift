@@ -149,7 +149,6 @@ class MuteStateManager: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.unconfirmedFeedbackDuration, execute: end)
     }
 
-    /// With a target, ends the feedback only if that target is the one that failed.
     private func endUnconfirmedFeedback(for target: ToggleTarget? = nil) {
         guard let end = unconfirmedFeedbackEnd,
               target == nil || target == unconfirmedTarget else { return }
