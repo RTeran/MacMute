@@ -29,9 +29,6 @@ class MuteStateManager: ObservableObject {
         }
     }
 
-    // Worst case is ~2.4 s: the content script wait (1200 ms) rounded up by hidden-tab timer
-    // alignment (~1 s), plus the 200 ms reinjection delay. 3 s leaves room for messaging.
-    static let toggleConfirmationTimeout: TimeInterval = 3.0
     private static let unconfirmedColor = NSColor.systemOrange.withAlphaComponent(0.85)
 
     private let socketServer = SocketServer()
@@ -40,7 +37,7 @@ class MuteStateManager: ObservableObject {
     private let logger = Logger(subsystem: "com.macmute.app", category: "toggle")
     private lazy var toggleConfirmation: ToggleConfirmation = {
         let confirmation = ToggleConfirmation(
-            confirmationTimeout: Self.toggleConfirmationTimeout,
+            confirmationTimeouts: .standard,
             feedbackDuration: UnconfirmedFeedback.duration,
             confirmedState: { [unowned self] target in
                 target == .mic ? self.isMuted : self.isCameraOff

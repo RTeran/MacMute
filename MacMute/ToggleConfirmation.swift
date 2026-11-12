@@ -89,6 +89,23 @@ enum ToggleSendOutcome: Equatable {
     case failed(reason: String)
 }
 
+/// How long the app waits for a toggle_result before showing the unconfirmed feedback.
+struct ConfirmationTimeouts: Equatable {
+    // Each budget must outlast the content script's wait for that target (1200 ms mic, 2500 ms
+    // camera), rounded up by hidden-tab timer alignment (~1 s), plus the 200 ms reinjection delay.
+    static let standard = ConfirmationTimeouts(mic: 3.0, camera: 4.0)
+
+    let mic: TimeInterval
+    let camera: TimeInterval
+
+    func timeout(for target: ToggleTarget) -> TimeInterval {
+        switch target {
+        case .mic: return mic
+        case .camera: return camera
+        }
+    }
+}
+
 enum ToggleTimerKind {
     case confirmation
     case unconfirmedFeedback
@@ -114,7 +131,7 @@ final class ToggleConfirmation {
     private(set) var pendingToggles = PendingToggleTracker()
     var isShowingUnconfirmedFeedback: Bool { unconfirmed != nil }
 
-    private let confirmationTimeout: TimeInterval
+    private let confirmationTimeouts: ConfirmationTimeouts
     private let feedbackDuration: TimeInterval
     private let confirmedState: (ToggleTarget) -> Bool
     private let send: Send
@@ -126,14 +143,14 @@ final class ToggleConfirmation {
     private var unconfirmed: (target: ToggleTarget, toggle: PendingToggleTracker.Pending, end: ToggleTimer)?
 
     init(
-        confirmationTimeout: TimeInterval,
+        confirmationTimeouts: ConfirmationTimeouts,
         feedbackDuration: TimeInterval,
         confirmedState: @escaping (ToggleTarget) -> Bool,
         send: @escaping Send,
         schedule: @escaping Schedule = ToggleConfirmation.scheduleOnMain,
         makeRequestId: @escaping () -> String = { UUID().uuidString }
     ) {
-        self.confirmationTimeout = confirmationTimeout
+        self.confirmationTimeouts = confirmationTimeouts
         self.feedbackDuration = feedbackDuration
         self.confirmedState = confirmedState
         self.send = send
@@ -154,7 +171,7 @@ final class ToggleConfirmation {
         let toggle = pendingToggles.begin(target, requestId: requestId, confirmedState: confirmedState(target))
 
         confirmationTimers[target]?.cancel()
-        confirmationTimers[target] = schedule(.confirmation, confirmationTimeout) { [weak self] in
+        confirmationTimers[target] = schedule(.confirmation, confirmationTimeouts.timeout(for: target)) { [weak self] in
             self?.fail(target, requestId: requestId, reason: "timeout")
         }
         logger.debug("Toggle \(target.rawValue, privacy: .public) sent, request \(requestId, privacy: .public), expected \(toggle.expected)")

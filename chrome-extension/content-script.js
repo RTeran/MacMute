@@ -105,11 +105,11 @@
     return null;
   }
 
-  // Worst case in a hidden tab: this wait, rounded up by Chrome's ~1 s timer alignment,
-  // plus the background's 200 ms reinjection delay. The app waits 3 s, so it must stay below that.
+  // Worst case in a hidden tab: this wait, rounded up by Chrome's ~1 s timer alignment, plus the
+  // background's 200 ms reinjection delay. It must stay below the app's ConfirmationTimeouts
+  // for the same target (3 s mic, 4 s camera).
   const MIC_STATE_CHANGE_TIMEOUT_MS = 1200;
-  // Turning the camera on in a hidden page takes ~1.2 s to warm up before Meet reports it. This
-  // can outlast the app's 3 s after timer alignment; a late success still clears the app's warning.
+  // Turning the camera on in a hidden page takes ~1.2 s to warm up before Meet reports it.
   const CAMERA_STATE_CHANGE_TIMEOUT_MS = 2500;
 
   const STATE_OBSERVER_OPTIONS = {

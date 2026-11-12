@@ -2,11 +2,13 @@ import XCTest
 
 private final class FakeTimer: ToggleTimer {
     let kind: ToggleTimerKind
+    let delay: TimeInterval
     let work: () -> Void
     private(set) var isCancelled = false
 
-    init(kind: ToggleTimerKind, work: @escaping () -> Void) {
+    init(kind: ToggleTimerKind, delay: TimeInterval, work: @escaping () -> Void) {
         self.kind = kind
+        self.delay = delay
         self.work = work
     }
 
@@ -32,7 +34,7 @@ private final class Harness {
 
     lazy var confirmation: ToggleConfirmation = {
         let confirmation = ToggleConfirmation(
-            confirmationTimeout: 3,
+            confirmationTimeouts: ConfirmationTimeouts(mic: 3, camera: 4),
             feedbackDuration: 3,
             confirmedState: { [unowned self] target in
                 target == .mic ? self.confirmedMuted : self.confirmedCameraOff
@@ -41,8 +43,8 @@ private final class Harness {
                 self.sentRequests.append((target, requestId))
                 completion(self.sendOutcome)
             },
-            schedule: { [unowned self] kind, _, work in
-                let timer = FakeTimer(kind: kind, work: work)
+            schedule: { [unowned self] kind, delay, work in
+                let timer = FakeTimer(kind: kind, delay: delay, work: work)
                 self.timers.append(timer)
                 return timer
             },
@@ -90,6 +92,19 @@ final class ToggleConfirmationTests: XCTestCase {
 
         XCTAssertEqual(harness.sentRequests.map(\.requestId), ["r1"])
         XCTAssertEqual(harness.sentRequests.map(\.target), [.mic])
+    }
+
+    func testWaitsForEachTargetWithItsOwnConfirmationTimeout() {
+        harness.confirmation.toggle(.mic)
+        harness.confirmation.toggle(.camera)
+
+        XCTAssertEqual(harness.confirmationTimer(0).delay, 3)
+        XCTAssertEqual(harness.confirmationTimer(1).delay, 4)
+    }
+
+    func testTheAppWaitsLongerForTheCameraThanForTheMic() {
+        XCTAssertEqual(ConfirmationTimeouts.standard.mic, 3.0)
+        XCTAssertEqual(ConfirmationTimeouts.standard.camera, 4.0)
     }
 
     func testSuccessWithMatchingRequestIdConfirmsWithoutFeedback() {
