@@ -125,6 +125,17 @@
   const MEDIA_SESSION_MESSAGE_TYPE = "macmute:media-session";
   const mediaSessionWaiters = { mic: null, camera: null };
 
+  // The DOM freezes while Chrome does not render Meet (window on another Space), but Meet still
+  // reports through the Media Session. This keeps the latest state from either source, so a
+  // second toggle in that situation does not start from the frozen DOM.
+  const knownState = { mic: null, camera: null };
+  // Media Session states seen since the page was last made visible; a hidden DOM that disagrees is stale.
+  const mediaSessionSinceVisible = { mic: undefined, camera: undefined };
+
+  function remember(target, state, source) {
+    knownState[target] = { state, source, at: Date.now() };
+  }
+
   // Maps "is the device active" to the state each target reads: mic → muted, camera → active.
   const stateFromMediaSession = {
     mic: (active) => !active,
@@ -177,16 +188,18 @@
           return;
         }
 
-        const before = readState();
-        if (before === null) {
+        const domBefore = readState();
+        if (domBefore === null) {
           finish({ ok: false, reason: "state_unknown", before: null, after: null });
           return;
         }
+        const known = knownState[target];
+        const before = known?.state ?? domBefore;
 
         const checkFlip = () => {
           const after = readState();
-          if (after !== null && after !== before) {
-            finish({ ok: true, before, after, source: "dom" });
+          if (after !== null && after !== domBefore) {
+            finish({ ok: true, before: domBefore, after, source: "dom" });
           }
         };
 
@@ -201,12 +214,18 @@
         timer = setTimeout(
           guarded(() => {
             checkFlip();
-            finish({ ok: false, reason: "timeout", before, after: readState() });
+            finish({ ok: false, reason: "timeout", before: domBefore, after: readState() });
           }),
           timeoutMs
         );
 
-        console.debug(`MacMute: ${target} click`, { before, visibility, at: startedAt });
+        console.debug(`MacMute: ${target} click`, {
+          before,
+          beforeSource: known?.source ?? "dom",
+          domBefore,
+          visibility,
+          at: startedAt,
+        });
         button.click();
         checkFlip();
       } catch (error) {
@@ -279,37 +298,56 @@
     );
   }
 
+  const findButtonFor = { mic: findMuteButton, camera: findCameraButton };
+
   // Meet's own page can forge this message; that is acceptable, so only its shape is checked.
+  // Meet also calls the Media Session outside our toggles (lobby, leaving, device loss), so a
+  // signal only confirms a pending toggle and is never reported to the app on its own.
   window.addEventListener("message", (event) => {
     if (!isMediaSessionMessage(event)) return;
     const { kind, active } = event.data;
     const state = stateFromMediaSession[kind](active);
     console.debug(`MacMute: media session ${kind} active=${active}`);
 
-    mediaSessionWaiters[kind]?.(state);
+    remember(kind, state, "media_session");
+    mediaSessionSinceVisible[kind] = state;
 
-    if (kind === "mic" && state !== currentMuteState) {
+    const waiter = mediaSessionWaiters[kind];
+    if (!waiter) return;
+    if (!findButtonFor[kind]()) {
+      console.debug(`MacMute: ignoring media session ${kind} signal, no ${kind} button`);
+      return;
+    }
+    waiter(state);
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    mediaSessionSinceVisible.mic = undefined;
+    mediaSessionSinceVisible.camera = undefined;
+  });
+
+  function reportDomState(target, state) {
+    if (state === null) return;
+    const mediaSessionState = mediaSessionSinceVisible[target];
+    if (document.visibilityState === "hidden" && mediaSessionState !== undefined && state !== mediaSessionState) {
+      console.debug(`MacMute: ignoring hidden ${target} DOM state ${state}, media session reported ${mediaSessionState}`);
+      return;
+    }
+    remember(target, state, "dom");
+    if (target === "mic" && state !== currentMuteState) {
       currentMuteState = state;
       sendStateUpdate(state);
-    } else if (kind === "camera" && state !== currentCameraState) {
+    } else if (target === "camera" && state !== currentCameraState) {
       currentCameraState = state;
       sendCameraStateUpdate(state);
     }
-  });
+  }
 
   // Observe DOM for mute button appearance and state changes
   const observer = new MutationObserver(() => {
-    const newMuteState = getMuteState();
-    if (newMuteState !== null && newMuteState !== currentMuteState) {
-      currentMuteState = newMuteState;
-      sendStateUpdate(newMuteState);
-    }
-
-    const newCameraState = getCameraState();
-    if (newCameraState !== null && newCameraState !== currentCameraState) {
-      currentCameraState = newCameraState;
-      sendCameraStateUpdate(newCameraState);
-    }
+    reportDomState("mic", getMuteState());
+    reportDomState("camera", getCameraState());
   });
 
   // Start observing once the page is ready
@@ -319,12 +357,14 @@
     // Report initial state
     const initialMuteState = getMuteState();
     if (initialMuteState !== null) {
+      remember("mic", initialMuteState, "dom");
       currentMuteState = initialMuteState;
       sendStateUpdate(initialMuteState);
     }
 
     const initialCameraState = getCameraState();
     if (initialCameraState !== null) {
+      remember("camera", initialCameraState, "dom");
       currentCameraState = initialCameraState;
       sendCameraStateUpdate(initialCameraState);
     }
@@ -357,7 +397,15 @@
       _getObserver: () => observer,
       _getState: () => ({ currentMuteState, currentCameraState }),
       _setState: (s) => {
-        if (s === null) { currentMuteState = null; currentCameraState = null; return; }
+        if (s === null) {
+          currentMuteState = null;
+          currentCameraState = null;
+          knownState.mic = null;
+          knownState.camera = null;
+          mediaSessionSinceVisible.mic = undefined;
+          mediaSessionSinceVisible.camera = undefined;
+          return;
+        }
         currentMuteState = s.currentMuteState ?? currentMuteState;
         currentCameraState = s.currentCameraState ?? currentCameraState;
       },

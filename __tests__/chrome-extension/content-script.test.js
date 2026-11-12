@@ -916,7 +916,7 @@ describe("media session signal", () => {
 
   test("does not confirm a mic toggle from a camera signal", async () => {
     document.body.innerHTML = '<button data-is-muted="false"></button>';
-    meetReportsAfterClick(document.querySelector("button"), { type: MEDIA_SESSION, kind: "camera", active: false });
+    meetReportsAfterClick(document.querySelector("button"), { type: MEDIA_SESSION, kind: "camera", active: true });
 
     const pending = script.toggleMute();
     jest.advanceTimersByTime(script.MIC_STATE_CHANGE_TIMEOUT_MS);
@@ -946,29 +946,148 @@ describe("media session signal", () => {
     expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
   });
 
-  test("sends a passive state_update when the media session reports a new mic state", () => {
-    script._setState({ currentMuteState: false });
+  test("does not send a state_update for a media session signal outside a toggle", () => {
+    script._setState({ currentMuteState: false, currentCameraState: true });
 
     postMediaSession({ type: MEDIA_SESSION, kind: "mic", active: false });
-    postMediaSession({ type: MEDIA_SESSION, kind: "mic", active: false });
-
-    expect(chrome.runtime.sendMessage).toHaveBeenCalledTimes(1);
-    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: "state_update", muted: true });
-  });
-
-  test("does not send a passive state_update when the mic state is unchanged", () => {
-    script._setState({ currentMuteState: true });
-
-    postMediaSession({ type: MEDIA_SESSION, kind: "mic", active: false });
+    postMediaSession({ type: MEDIA_SESSION, kind: "camera", active: false });
 
     expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
   });
 
-  test("sends a passive camera_state_update when the media session reports a new camera state", () => {
-    script._setState({ currentCameraState: false });
+  test("confirms two consecutive toggles from the media session while the DOM stays frozen", async () => {
+    document.body.innerHTML = '<button data-is-muted="false"></button>';
+    const btn = document.querySelector("button");
+    let meetMuted = false;
+    btn.addEventListener("click", () => {
+      meetMuted = !meetMuted;
+      const active = !meetMuted;
+      setTimeout(() => postMediaSession({ type: MEDIA_SESSION, kind: "mic", active }), 19);
+    });
 
-    postMediaSession({ type: MEDIA_SESSION, kind: "camera", active: true });
+    const mute = script.toggleMute();
+    jest.advanceTimersByTime(19);
+    const first = await mute;
+    const unmute = script.toggleMute();
+    jest.advanceTimersByTime(19);
+    const second = await unmute;
 
-    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: "camera_state_update", active: true });
+    expect(first).toEqual(expect.objectContaining({ ok: true, before: false, after: true, source: "media_session" }));
+    expect(second).toEqual(expect.objectContaining({ ok: true, before: true, after: false, source: "media_session" }));
   });
+
+  test("does not confirm from the media session when the button is gone", async () => {
+    document.body.innerHTML = '<button data-is-muted="false"></button>';
+    const btn = document.querySelector("button");
+    btn.addEventListener("click", () => {
+      btn.remove();
+      setTimeout(() => postMediaSession({ type: MEDIA_SESSION, kind: "mic", active: false }), 19);
+    });
+
+    const pending = script.toggleMute();
+    jest.advanceTimersByTime(script.MIC_STATE_CHANGE_TIMEOUT_MS);
+    const result = await pending;
+
+    expect(result).toEqual(expect.objectContaining({ ok: false, reason: "timeout" }));
+  });
+
+  test("resolves each pending toggle only with its own target's signal", async () => {
+    document.body.innerHTML =
+      '<button data-is-muted="false"></button><button aria-label="Turn off camera"></button>';
+    const results = {};
+
+    const mic = script.toggleMute().then((r) => (results.mic = r));
+    const camera = script.toggleCamera().then((r) => (results.camera = r));
+    postMediaSession({ type: MEDIA_SESSION, kind: "camera", active: false });
+    await camera;
+    const micAfterCameraSignal = results.mic;
+    postMediaSession({ type: MEDIA_SESSION, kind: "mic", active: false });
+    await mic;
+
+    expect(micAfterCameraSignal).toBeUndefined();
+    expect(results.camera).toEqual(expect.objectContaining({ ok: true, after: false, source: "media_session" }));
+    expect(results.mic).toEqual(expect.objectContaining({ ok: true, after: true, source: "media_session" }));
+  });
+
+  test("ignores a late signal after a timeout and confirms the next toggle with its own signal", async () => {
+    document.body.innerHTML = '<button data-is-muted="false"></button>';
+    const resolved = jest.fn();
+
+    const first = script.toggleMute().then(resolved);
+    jest.advanceTimersByTime(script.MIC_STATE_CHANGE_TIMEOUT_MS);
+    await first;
+    postMediaSession({ type: MEDIA_SESSION, kind: "mic", active: false });
+    const second = script.toggleMute();
+    postMediaSession({ type: MEDIA_SESSION, kind: "mic", active: true });
+    const secondResult = await second;
+
+    expect(resolved).toHaveBeenCalledTimes(1);
+    expect(resolved).toHaveBeenCalledWith(expect.objectContaining({ ok: false, reason: "timeout" }));
+    expect(secondResult).toEqual(expect.objectContaining({ ok: true, before: true, after: false, source: "media_session" }));
+  });
+
+  test("rejects an inherited kind such as toString without throwing", async () => {
+    const consoleError = jest.spyOn(console, "error").mockImplementation(() => {});
+    script._setState({ currentMuteState: false });
+    document.body.innerHTML = '<button data-is-muted="false"></button>';
+
+    const pending = script.toggleMute();
+    postMediaSession({ type: MEDIA_SESSION, kind: "toString", active: false });
+    jest.advanceTimersByTime(script.MIC_STATE_CHANGE_TIMEOUT_MS);
+    const result = await pending;
+
+    expect(result).toEqual(expect.objectContaining({ ok: false, reason: "timeout" }));
+    expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+});
+
+describe("DOM updates while the page is hidden", () => {
+  const MEDIA_SESSION = "macmute:media-session";
+
+  function setVisibility(state) {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+    document.dispatchEvent(new Event("visibilitychange"));
+  }
+
+  function postMediaSession(data) {
+    window.dispatchEvent(new MessageEvent("message", { data, source: window }));
+  }
+
+  afterEach(() => {
+    setVisibility("visible");
+  });
+
+  test("does not report a stale DOM state that contradicts the media session while hidden", async () => {
+    setVisibility("hidden");
+    postMediaSession({ type: MEDIA_SESSION, kind: "mic", active: false });
+
+    document.body.innerHTML = '<button data-is-muted="false"></button>';
+    await Promise.resolve();
+
+    expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
+  });
+
+  test("trusts the DOM again once the page has been visible", async () => {
+    setVisibility("hidden");
+    postMediaSession({ type: MEDIA_SESSION, kind: "mic", active: false });
+    setVisibility("visible");
+    setVisibility("hidden");
+
+    document.body.innerHTML = '<button data-is-muted="false"></button>';
+    await Promise.resolve();
+
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: "state_update", muted: false });
+  });
+
+  test("reports a hidden DOM state that agrees with the media session", async () => {
+    setVisibility("hidden");
+    postMediaSession({ type: MEDIA_SESSION, kind: "mic", active: false });
+
+    document.body.innerHTML = '<button data-is-muted="true"></button>';
+    await Promise.resolve();
+
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: "state_update", muted: true });
+  });
+
 });
