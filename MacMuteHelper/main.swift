@@ -47,18 +47,13 @@ class NativeMessaging {
         }
         guard headerWritten == 4, bodyWritten == data.count, fflush(stdout) == 0 else {
             failStdoutWrite(written: headerWritten + bodyWritten, total: 4 + data.count)
-            return
         }
     }
 
-    // Chrome closes the pipe when the extension disconnects; there is nobody left to relay to.
-    private static func failStdoutWrite(written: Int, total: Int) {
-        let code = errno
-        NSLog("MacMuteHelper: Failed to write to Chrome (\(written)/\(total) bytes): \(String(cString: strerror(code)))")
-        if code == EPIPE {
-            exit(1)
-        }
-        clearerr(stdout)
+    // A partial frame desyncs the length-prefixed stream, so any later message would be garbage.
+    private static func failStdoutWrite(written: Int, total: Int) -> Never {
+        NSLog("MacMuteHelper: Failed to write to Chrome (\(written)/\(total) bytes): \(String(cString: strerror(errno)))")
+        exit(1)
     }
 }
 
