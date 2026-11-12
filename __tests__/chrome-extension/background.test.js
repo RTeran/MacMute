@@ -25,12 +25,12 @@ beforeEach(() => {
   global.chrome = createChromeMock();
   jest.resetModules();
   jest.spyOn(console, "log").mockImplementation(() => {});
-  jest.spyOn(console, "debug").mockImplementation(() => {});
   background = require("../../chrome-extension/background");
   port = chrome.runtime.connectNative.mock.results[0].value;
 });
 
 afterEach(() => {
+  jest.useRealTimers();
   jest.restoreAllMocks();
 });
 
@@ -93,14 +93,33 @@ describe("mic toggle", () => {
 
   test("reports as soon as one tab confirms, without waiting for slower tabs", async () => {
     givenMeetTabs([{ id: 1 }, { id: 2 }]);
+    let answerSlowTab;
     chrome.tabs.sendMessage.mockImplementation((tabId) =>
-      tabId === 1 ? Promise.resolve({ ok: true, before: false, after: true }) : new Promise(() => {})
+      tabId === 1
+        ? Promise.resolve({ ok: true, before: false, after: true })
+        : new Promise((resolve) => {
+            answerSlowTab = resolve;
+          })
     );
 
     await background.handleNativeMessage({ type: "toggle" });
+    const resultsBeforeSlowTab = postedToggleResults();
+    answerSlowTab({ ok: false, reason: "timeout", before: false, after: false });
+    await Promise.resolve();
+
+    expect(resultsBeforeSlowTab).toEqual([
+      { type: "toggle_result", target: "mic", ok: true, muted: true },
+    ]);
+    expect(postedToggleResults()).toHaveLength(1);
+  });
+
+  test("reports tabs_query_failed when the Meet tabs cannot be listed", async () => {
+    chrome.tabs.query.mockRejectedValue(new Error("tabs unavailable"));
+
+    await background.handleNativeMessage({ type: "toggle", requestId: "q1" });
 
     expect(postedToggleResults()).toEqual([
-      { type: "toggle_result", target: "mic", ok: true, muted: true },
+      { type: "toggle_result", target: "mic", ok: false, reason: "tabs_query_failed", requestId: "q1" },
     ]);
   });
 
@@ -143,6 +162,17 @@ describe("camera toggle", () => {
     ]);
   });
 
+  test("reports the camera as not off when it was turned on", async () => {
+    givenMeetTabs([{ id: 1 }]);
+    givenTabResponses({ 1: { ok: true, before: false, after: true } });
+
+    await background.handleNativeMessage({ type: "toggle_camera" });
+
+    expect(postedToggleResults()).toEqual([
+      { type: "toggle_result", target: "camera", ok: true, off: false },
+    ]);
+  });
+
   test("reports no_meet_tab for the camera when there is no Meet tab", async () => {
     givenMeetTabs([]);
 
@@ -156,12 +186,15 @@ describe("camera toggle", () => {
 
 describe("content script injection", () => {
   test("injects the content script and retries once when the tab has no receiver", async () => {
+    jest.useFakeTimers();
     givenMeetTabs([{ id: 1 }]);
     chrome.tabs.sendMessage
       .mockRejectedValueOnce(new Error("Could not establish connection. Receiving end does not exist."))
       .mockResolvedValueOnce({ ok: true, before: false, after: true });
 
-    await background.handleNativeMessage({ type: "toggle" });
+    const handled = background.handleNativeMessage({ type: "toggle" });
+    await jest.advanceTimersByTimeAsync(200);
+    await handled;
 
     expect(chrome.scripting.executeScript).toHaveBeenCalledWith({
       target: { tabId: 1 },
@@ -207,10 +240,30 @@ describe("native port", () => {
     givenMeetTabs([{ id: 1 }]);
     givenTabResponses({ 1: { ok: true, before: false, after: true } });
 
-    await background.handleNativeMessage({ type: "toggle" });
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+
+    await background.handleNativeMessage({ type: "toggle", requestId: "lost-1" });
 
     expect(port.postMessage).not.toHaveBeenCalled();
-    jest.useRealTimers();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("Native port not connected"),
+      expect.objectContaining({ requestId: "lost-1" })
+    );
+  });
+
+  test("logs native_port_lost when posting to the native port throws", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    port.postMessage.mockImplementation(() => {
+      throw new Error("Attempting to use a disconnected port object");
+    });
+    givenMeetTabs([]);
+
+    await background.handleNativeMessage({ type: "toggle", requestId: "lost-2" });
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("native_port_lost"),
+      expect.objectContaining({ requestId: "lost-2" })
+    );
   });
 
   test("forwards passive state updates from content scripts to the app", () => {

@@ -37,10 +37,14 @@ const TOGGLE_TARGETS = { toggle: "mic", toggle_camera: "camera" };
 
 function postToNative(message) {
   if (!port) {
-    console.debug("MacMute: Native port not connected, dropping message", message);
+    console.warn("MacMute: Native port not connected, dropping message", message);
     return;
   }
-  port.postMessage(message);
+  try {
+    port.postMessage(message);
+  } catch (error) {
+    console.warn("MacMute: native_port_lost, dropping message", { ...message, error: error.message });
+  }
 }
 
 function handleNativeMessage(message) {
@@ -132,7 +136,14 @@ function collectTabResponses(tabs, message) {
 
 async function toggleInMeetTabs(type, requestId) {
   const target = TOGGLE_TARGETS[type];
-  const tabs = await chrome.tabs.query({ url: MEET_URL_PATTERN });
+  let tabs;
+  try {
+    tabs = await chrome.tabs.query({ url: MEET_URL_PATTERN });
+  } catch (error) {
+    console.warn("MacMute: Could not list Meet tabs", error);
+    postToNative(buildToggleResult(target, { ok: false, reason: "tabs_query_failed" }, requestId));
+    return;
+  }
   const responses = await collectTabResponses(tabs, { type });
   const result = buildToggleResult(target, aggregateTabResponses(responses), requestId);
 
