@@ -17,11 +17,15 @@ class SocketServer {
     var onMessageReceived: (([String: Any]) -> Void)?
     var onClientConnected: (() -> Void)?
 
-    init() {
+    convenience init() {
         let appSupport = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/MacMute")
         try? FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
-        self.socketPath = appSupport.appendingPathComponent("macmute.sock").path
+        self.init(socketPath: appSupport.appendingPathComponent("macmute.sock").path)
+    }
+
+    init(socketPath: String) {
+        self.socketPath = socketPath
     }
 
     func start() {
@@ -30,11 +34,17 @@ class SocketServer {
         }
     }
 
+    // Each fd is closed by its own source's cancel handler: closing it here first makes libdispatch
+    // report a vanished resource, and the fd number could be reused before the handler runs.
     func stop() {
-        listenSource?.cancel()
-        readSource?.cancel()
-        if clientSocket >= 0 { close(clientSocket) }
-        if serverSocket >= 0 { close(serverSocket) }
+        queue.sync {
+            listenSource?.cancel()
+            listenSource = nil
+            readSource?.cancel()
+            readSource = nil
+            serverSocket = -1
+            clientSocket = -1
+        }
         unlink(socketPath)
     }
 
@@ -126,14 +136,13 @@ class SocketServer {
 
         NSLog("MacMute: Socket server listening at \(socketPath)")
 
-        let source = DispatchSource.makeReadSource(fileDescriptor: serverSocket, queue: queue)
+        let listeningSocket = serverSocket
+        let source = DispatchSource.makeReadSource(fileDescriptor: listeningSocket, queue: queue)
         source.setEventHandler { [weak self] in
             self?.acceptConnection()
         }
-        source.setCancelHandler { [weak self] in
-            if let fd = self?.serverSocket, fd >= 0 {
-                close(fd)
-            }
+        source.setCancelHandler {
+            close(listeningSocket)
         }
         source.resume()
         self.listenSource = source
@@ -146,10 +155,9 @@ class SocketServer {
             return
         }
 
-        // Close previous client if any
         if clientSocket >= 0 {
+            NSLog("MacMute: Replacing the connected helper with a new one")
             readSource?.cancel()
-            close(clientSocket)
         }
 
         // Without this, writing to a helper that just died raises SIGPIPE and kills the app.
@@ -169,19 +177,23 @@ class SocketServer {
     }
 
     private func startReading() {
-        let source = DispatchSource.makeReadSource(fileDescriptor: clientSocket, queue: queue)
+        let client = clientSocket
+        let source = DispatchSource.makeReadSource(fileDescriptor: client, queue: queue)
         var buffer = Data()
 
-        source.setEventHandler { [weak self] in
+        source.setEventHandler { [weak self, unowned source] in
             guard let self = self else { return }
             var readBuffer = [UInt8](repeating: 0, count: 4096)
-            let bytesRead = read(self.clientSocket, &readBuffer, readBuffer.count)
+            let bytesRead = read(client, &readBuffer, readBuffer.count)
 
             if bytesRead <= 0 {
-                NSLog("MacMute: Helper disconnected")
-                self.readSource?.cancel()
-                close(self.clientSocket)
-                self.clientSocket = -1
+                let cause = bytesRead < 0 ? String(cString: strerror(errno)) : "end of stream"
+                NSLog("MacMute: Helper disconnected (\(cause))")
+                source.cancel()
+                if self.clientSocket == client {
+                    self.clientSocket = -1
+                    self.readSource = nil
+                }
                 return
             }
 
@@ -202,11 +214,8 @@ class SocketServer {
             }
         }
 
-        source.setCancelHandler { [weak self] in
-            if let fd = self?.clientSocket, fd >= 0 {
-                close(fd)
-                self?.clientSocket = -1
-            }
+        source.setCancelHandler {
+            close(client)
         }
 
         source.resume()
