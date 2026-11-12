@@ -111,6 +111,7 @@ function buildToggleResult(target, aggregated, requestId) {
   const result = { type: "toggle_result", target, ok: aggregated.ok === true };
   if (result.ok && target === "mic") result.muted = aggregated.after;
   if (result.ok && target === "camera") result.off = !aggregated.after;
+  if (result.ok && aggregated.source !== undefined) result.source = aggregated.source;
   if (!result.ok) result.reason = aggregated.reason;
   if (requestId !== undefined) result.requestId = requestId;
   return result;

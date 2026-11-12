@@ -45,14 +45,14 @@ describe("mic toggle", () => {
     expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(2, { type: "toggle" });
   });
 
-  test("reports the confirmed muted state to the app", async () => {
+  test("reports the confirmed muted state and its source to the app", async () => {
     givenMeetTabs([{ id: 1 }]);
-    givenTabResponses({ 1: { ok: true, before: false, after: true } });
+    givenTabResponses({ 1: { ok: true, before: false, after: true, source: "media_session" } });
 
     await background.handleNativeMessage({ type: "toggle", requestId: "r1" });
 
     expect(postedToggleResults()).toEqual([
-      { type: "toggle_result", target: "mic", ok: true, muted: true, requestId: "r1" },
+      { type: "toggle_result", target: "mic", ok: true, muted: true, source: "media_session", requestId: "r1" },
     ]);
   });
 
@@ -152,13 +152,13 @@ describe("mic toggle", () => {
 describe("camera toggle", () => {
   test("reports the confirmed camera state as off", async () => {
     givenMeetTabs([{ id: 1 }]);
-    givenTabResponses({ 1: { ok: true, before: true, after: false } });
+    givenTabResponses({ 1: { ok: true, before: true, after: false, source: "dom" } });
 
     await background.handleNativeMessage({ type: "toggle_camera", requestId: "c1" });
 
     expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(1, { type: "toggle_camera" });
     expect(postedToggleResults()).toEqual([
-      { type: "toggle_result", target: "camera", ok: true, off: true, requestId: "c1" },
+      { type: "toggle_result", target: "camera", ok: true, off: true, source: "dom", requestId: "c1" },
     ]);
   });
 
