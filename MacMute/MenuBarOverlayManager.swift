@@ -197,13 +197,7 @@ private class ScreenBorderView: NSView {
     }
 
     func startPulsing() {
-        let pulse = CABasicAnimation(keyPath: "opacity")
-        pulse.fromValue = 1.0
-        pulse.toValue = 0.25
-        pulse.duration = 0.35
-        pulse.autoreverses = true
-        pulse.repeatCount = .infinity
-        layer?.add(pulse, forKey: "unconfirmedPulse")
+        layer?.add(UnconfirmedFeedback.blinkAnimation(), forKey: "unconfirmedPulse")
     }
 
     private func drawFullBorder(_ color: NSColor, depth d: CGFloat) {

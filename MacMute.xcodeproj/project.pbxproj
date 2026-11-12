@@ -26,6 +26,9 @@
 		A1000053 /* SocketServerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000051 /* SocketServerTests.swift */; };
 		A1000054 /* GlobalShortcutManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000004 /* GlobalShortcutManager.swift */; };
 		A1000055 /* ShortcutMatcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000052 /* ShortcutMatcherTests.swift */; };
+		A1000056 /* UnconfirmedFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000053 /* UnconfirmedFeedback.swift */; };
+		A1000057 /* UnconfirmedFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000053 /* UnconfirmedFeedback.swift */; };
+		A1000058 /* UnconfirmedFeedbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000054 /* UnconfirmedFeedbackTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -72,6 +75,8 @@
 		A2000050 /* ToggleConfirmationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToggleConfirmationTests.swift; sourceTree = "<group>"; };
 		A2000051 /* SocketServerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocketServerTests.swift; sourceTree = "<group>"; };
 		A2000052 /* ShortcutMatcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutMatcherTests.swift; sourceTree = "<group>"; };
+		A2000053 /* UnconfirmedFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnconfirmedFeedback.swift; sourceTree = "<group>"; };
+		A2000054 /* UnconfirmedFeedbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnconfirmedFeedbackTests.swift; sourceTree = "<group>"; };
 		A3000030 /* MacMuteTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MacMuteTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -122,6 +127,7 @@
 				A2000007 /* AudioManager.swift */,
 				A2000008 /* MuteStateManager.swift */,
 				A2000012 /* ToggleConfirmation.swift */,
+				A2000053 /* UnconfirmedFeedback.swift */,
 				A2000011 /* main.swift */,
 				A2000009 /* Info.plist */,
 				A2000010 /* MacMute.entitlements */,
@@ -154,6 +160,7 @@
 				A2000050 /* ToggleConfirmationTests.swift */,
 				A2000051 /* SocketServerTests.swift */,
 				A2000052 /* ShortcutMatcherTests.swift */,
+				A2000054 /* UnconfirmedFeedbackTests.swift */,
 			);
 			path = MacMuteTests;
 			sourceTree = "<group>";
@@ -256,6 +263,7 @@
 				A1000007 /* AudioManager.swift in Sources */,
 				A1000008 /* MuteStateManager.swift in Sources */,
 				A1000010 /* ToggleConfirmation.swift in Sources */,
+				A1000056 /* UnconfirmedFeedback.swift in Sources */,
 				A1000009 /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -278,6 +286,8 @@
 				A1000053 /* SocketServerTests.swift in Sources */,
 				A1000054 /* GlobalShortcutManager.swift in Sources */,
 				A1000055 /* ShortcutMatcherTests.swift in Sources */,
+				A1000057 /* UnconfirmedFeedback.swift in Sources */,
+				A1000058 /* UnconfirmedFeedbackTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
