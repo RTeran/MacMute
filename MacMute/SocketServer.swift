@@ -1,5 +1,11 @@
 import Foundation
 
+enum SocketSendError: String, Error {
+    case noSocketClient = "no_socket_client"
+    case serializationFailed = "serialization_failed"
+    case writeFailed = "write_failed"
+}
+
 class SocketServer {
     private let socketPath: String
     private var serverSocket: Int32 = -1
@@ -32,25 +38,28 @@ class SocketServer {
         unlink(socketPath)
     }
 
-    /// `completion` runs on the main queue with `false` when no helper is connected or the write fails.
-    func sendMessage(_ message: [String: Any], completion: ((Bool) -> Void)? = nil) {
+    /// `completion` runs on the main queue.
+    func sendMessage(_ message: [String: Any], completion: ((Result<Void, SocketSendError>) -> Void)? = nil) {
         queue.async { [weak self] in
-            let sent = self?.write(message) ?? false
+            let result = self?.write(message) ?? .failure(.noSocketClient)
             if let completion = completion {
-                DispatchQueue.main.async { completion(sent) }
+                DispatchQueue.main.async { completion(result) }
             }
         }
     }
 
-    private func write(_ message: [String: Any]) -> Bool {
+    private func write(_ message: [String: Any]) -> Result<Void, SocketSendError> {
         guard clientSocket >= 0 else {
             NSLog("MacMute: No client connected, cannot send message")
-            return false
+            return .failure(.noSocketClient)
         }
 
-        guard let data = try? JSONSerialization.data(withJSONObject: message) else {
-            NSLog("MacMute: Failed to serialize message: \(message)")
-            return false
+        let data: Data
+        do {
+            data = try JSONSerialization.data(withJSONObject: message)
+        } catch {
+            NSLog("MacMute: Failed to serialize message \(message): \(error)")
+            return .failure(.serializationFailed)
         }
         var messageData = data
         messageData.append(0x0A) // newline delimiter
@@ -72,10 +81,10 @@ class SocketServer {
         guard written == total else {
             let cause = writeErrno.map { String(cString: strerror($0)) } ?? "no buffer"
             NSLog("MacMute: Failed to write to socket (\(written)/\(total) bytes): \(cause)")
-            return false
+            return .failure(.writeFailed)
         }
         NSLog("MacMute: Sent message to helper: \(message)")
-        return true
+        return .success(())
     }
 
     private func startServer() {

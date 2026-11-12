@@ -29,9 +29,9 @@ class MuteStateManager: ObservableObject {
         }
     }
 
-    // Covers the content script wait (1200 ms) rounded up by hidden-tab timer alignment (~1 s)
-    // plus the 200 ms reinjection delay.
-    static let toggleConfirmationTimeout: TimeInterval = 2.5
+    // Worst case is ~2.4 s: the content script wait (1200 ms) rounded up by hidden-tab timer
+    // alignment (~1 s), plus the 200 ms reinjection delay. 3 s leaves room for messaging.
+    static let toggleConfirmationTimeout: TimeInterval = 3.0
     static let unconfirmedFeedbackDuration: TimeInterval = 3
     private static let unconfirmedColor = NSColor.systemOrange.withAlphaComponent(0.85)
 
@@ -47,8 +47,13 @@ class MuteStateManager: ObservableObject {
                 target == .mic ? self.isMuted : self.isCameraOff
             },
             send: { [weak self] target, requestId, completion in
-                guard let self = self else { return completion(false) }
-                self.socketServer.sendMessage(["type": target.commandType, "requestId": requestId], completion: completion)
+                guard let self = self else { return completion(.failed(reason: "app_shutting_down")) }
+                self.socketServer.sendMessage(["type": target.commandType, "requestId": requestId]) { result in
+                    switch result {
+                    case .success: completion(.sent)
+                    case let .failure(error): completion(.failed(reason: error.rawValue))
+                    }
+                }
             }
         )
         confirmation.onUnconfirmedFeedbackStart = { [weak self] _ in
@@ -136,29 +141,18 @@ class MuteStateManager: ObservableObject {
     }
 
     private func handleToggleResult(_ message: [String: Any]) {
-        guard let targetName = message["target"] as? String,
-              let target = ToggleTarget(rawValue: targetName),
-              let ok = message["ok"] as? Bool else {
+        guard let result = ToggleResult(message: message) else {
             logger.error("Malformed toggle_result: \(String(describing: message), privacy: .public)")
             return
         }
-
-        let stateKey = target == .mic ? "muted" : "off"
-        let newState = message[stateKey] as? Bool
-        if ok && newState == nil {
-            logger.error("toggle_result ok without \(stateKey, privacy: .public): \(String(describing: message), privacy: .public)")
+        if result.outcome == .failed(reason: "missing_state") {
+            logger.error("toggle_result ok without state: \(String(describing: message), privacy: .public)")
         }
 
-        toggleConfirmation.handleToggleResult(
-            target,
-            requestId: message["requestId"] as? String,
-            ok: ok,
-            newState: newState,
-            reason: message["reason"] as? String
-        )
+        toggleConfirmation.handle(result)
 
-        guard ok, let newState = newState else { return }
-        switch target {
+        guard case let .confirmed(newState) = result.outcome else { return }
+        switch result.target {
         case .mic: updateMicState(muted: newState)
         case .camera: updateCameraState(active: !newState)
         }

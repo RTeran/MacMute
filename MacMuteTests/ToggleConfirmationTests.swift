@@ -1,12 +1,12 @@
 import XCTest
 
 private final class FakeTimer: ToggleTimer {
-    let delay: TimeInterval
+    let kind: ToggleTimerKind
     let work: () -> Void
     private(set) var isCancelled = false
 
-    init(delay: TimeInterval, work: @escaping () -> Void) {
-        self.delay = delay
+    init(kind: ToggleTimerKind, work: @escaping () -> Void) {
+        self.kind = kind
         self.work = work
     }
 
@@ -23,7 +23,7 @@ private final class FakeTimer: ToggleTimer {
 private final class Harness {
     var confirmedMuted = false
     var confirmedCameraOff = false
-    var sendSucceeds = true
+    var sendOutcome = ToggleSendOutcome.sent
     private(set) var sentRequests: [(target: ToggleTarget, requestId: String)] = []
     private(set) var timers: [FakeTimer] = []
     private(set) var feedbackStarts: [ToggleTarget] = []
@@ -32,17 +32,17 @@ private final class Harness {
 
     lazy var confirmation: ToggleConfirmation = {
         let confirmation = ToggleConfirmation(
-            confirmationTimeout: 2.5,
+            confirmationTimeout: 3,
             feedbackDuration: 3,
             confirmedState: { [unowned self] target in
                 target == .mic ? self.confirmedMuted : self.confirmedCameraOff
             },
             send: { [unowned self] target, requestId, completion in
                 self.sentRequests.append((target, requestId))
-                completion(self.sendSucceeds)
+                completion(self.sendOutcome)
             },
-            schedule: { [unowned self] delay, work in
-                let timer = FakeTimer(delay: delay, work: work)
+            schedule: { [unowned self] kind, _, work in
+                let timer = FakeTimer(kind: kind, work: work)
                 self.timers.append(timer)
                 return timer
             },
@@ -61,11 +61,19 @@ private final class Harness {
     }()
 
     func confirmationTimer(_ index: Int = 0) -> FakeTimer {
-        timers.filter { $0.delay == 2.5 }[index]
+        timers.filter { $0.kind == .confirmation }[index]
     }
 
-    func feedbackTimer() -> FakeTimer? {
-        timers.last { $0.delay == 3 }
+    func feedbackTimer(_ index: Int = 0) -> FakeTimer {
+        timers.filter { $0.kind == .unconfirmedFeedback }[index]
+    }
+
+    func confirm(_ target: ToggleTarget, _ requestId: String?, newState: Bool) {
+        confirmation.handle(ToggleResult(target: target, requestId: requestId, outcome: .confirmed(newState: newState)))
+    }
+
+    func fail(_ target: ToggleTarget, _ requestId: String?, reason: String) {
+        confirmation.handle(ToggleResult(target: target, requestId: requestId, outcome: .failed(reason: reason)))
     }
 }
 
@@ -87,7 +95,7 @@ final class ToggleConfirmationTests: XCTestCase {
     func testSuccessWithMatchingRequestIdConfirmsWithoutFeedback() {
         harness.confirmation.toggle(.mic)
 
-        harness.confirmation.handleToggleResult(.mic, requestId: "r1", ok: true, newState: true, reason: nil)
+        harness.confirm(.mic, "r1", newState: true)
         harness.confirmationTimer().fire()
 
         XCTAssertTrue(harness.confirmationTimer().isCancelled)
@@ -98,18 +106,82 @@ final class ToggleConfirmationTests: XCTestCase {
     func testStaleRequestIdIsIgnored() {
         harness.confirmation.toggle(.mic)
 
-        harness.confirmation.handleToggleResult(.mic, requestId: "old", ok: false, newState: nil, reason: "timeout")
-        harness.confirmation.handleToggleResult(.mic, requestId: "old", ok: true, newState: true, reason: nil)
+        harness.fail(.mic, "old", reason: "timeout")
+        harness.confirm(.mic, "old", newState: true)
 
         XCTAssertTrue(harness.feedbackStarts.isEmpty)
         XCTAssertEqual(harness.confirmation.pendingToggles.pending[.mic]?.requestId, "r1")
         XCTAssertFalse(harness.confirmationTimer().isCancelled)
     }
 
+    func testSuccessWithMatchingRequestIdButUnexpectedStateShowsFeedback() {
+        harness.confirmation.toggle(.mic)
+
+        harness.confirm(.mic, "r1", newState: false)
+
+        XCTAssertEqual(harness.feedbackStarts, [.mic])
+        XCTAssertTrue(harness.confirmationTimer().isCancelled)
+        XCTAssertNil(harness.confirmation.pendingToggles.pending[.mic])
+    }
+
+    func testFirstPressFailingWhileSecondIsPendingThenSecondReachingTheWrongStateShowsFeedback() {
+        harness.confirmation.toggle(.mic)
+        harness.confirmation.toggle(.mic)
+        harness.fail(.mic, "r1", reason: "timeout")
+        XCTAssertTrue(harness.feedbackStarts.isEmpty)
+
+        harness.confirm(.mic, "r2", newState: true)
+
+        XCTAssertEqual(harness.feedbackStarts, [.mic])
+    }
+
+    func testSuccessWithoutRequestIdConfirmsWhenItReachesTheExpectedState() {
+        harness.confirmation.toggle(.mic)
+
+        harness.confirm(.mic, nil, newState: true)
+
+        XCTAssertNil(harness.confirmation.pendingToggles.pending[.mic])
+        XCTAssertTrue(harness.confirmationTimer().isCancelled)
+        XCTAssertTrue(harness.feedbackStarts.isEmpty)
+    }
+
+    func testSuccessWithoutRequestIdAndUnexpectedStateLeavesTheToggleRunning() {
+        harness.confirmation.toggle(.mic)
+
+        harness.confirm(.mic, nil, newState: false)
+
+        XCTAssertEqual(harness.confirmation.pendingToggles.pending[.mic]?.requestId, "r1")
+        XCTAssertFalse(harness.confirmationTimer().isCancelled)
+    }
+
+    func testPassiveConfirmationCancelsTheTimeout() {
+        harness.confirmation.toggle(.camera)
+
+        harness.confirmation.handlePassiveUpdate(.camera, newState: true)
+        harness.confirmationTimer().fire()
+
+        XCTAssertTrue(harness.feedbackStarts.isEmpty)
+        XCTAssertFalse(harness.confirmation.isShowingUnconfirmedFeedback)
+    }
+
+    func testSecondFailureKeepsTheFeedbackAfterTheFirstEndTimer() {
+        harness.confirmation.toggle(.mic)
+        harness.confirmationTimer(0).fire()
+        harness.confirmation.toggle(.camera)
+        harness.confirmationTimer(1).fire()
+
+        harness.feedbackTimer(0).fire()
+
+        XCTAssertTrue(harness.confirmation.isShowingUnconfirmedFeedback)
+        XCTAssertEqual(harness.feedbackEnds, 0)
+        harness.feedbackTimer(1).fire()
+        XCTAssertFalse(harness.confirmation.isShowingUnconfirmedFeedback)
+    }
+
     func testResultWithoutRequestIdDoesNotResolveThePendingToggle() {
         harness.confirmation.toggle(.mic)
 
-        harness.confirmation.handleToggleResult(.mic, requestId: nil, ok: false, newState: nil, reason: "timeout")
+        harness.fail(.mic, nil, reason: "timeout")
 
         XCTAssertTrue(harness.feedbackStarts.isEmpty)
         XCTAssertEqual(harness.confirmation.pendingToggles.pending[.mic]?.requestId, "r1")
@@ -128,14 +200,14 @@ final class ToggleConfirmationTests: XCTestCase {
     func testFailureResultShowsUnconfirmedFeedback() {
         harness.confirmation.toggle(.mic)
 
-        harness.confirmation.handleToggleResult(.mic, requestId: "r1", ok: false, newState: nil, reason: "no_meet_tab")
+        harness.fail(.mic, "r1", reason: "no_meet_tab")
 
         XCTAssertEqual(harness.feedbackStarts, [.mic])
         XCTAssertTrue(harness.confirmationTimer().isCancelled)
     }
 
     func testSendWithoutClientShowsUnconfirmedFeedback() {
-        harness.sendSucceeds = false
+        harness.sendOutcome = .failed(reason: "no_socket_client")
 
         harness.confirmation.toggle(.mic)
 
@@ -147,7 +219,7 @@ final class ToggleConfirmationTests: XCTestCase {
         harness.confirmation.toggle(.mic)
         harness.confirmationTimer().fire()
 
-        harness.feedbackTimer()?.fire()
+        harness.feedbackTimer().fire()
 
         XCTAssertEqual(harness.feedbackEnds, 1)
         XCTAssertFalse(harness.confirmation.isShowingUnconfirmedFeedback)
@@ -157,11 +229,11 @@ final class ToggleConfirmationTests: XCTestCase {
         harness.confirmation.toggle(.mic)
         harness.confirmationTimer().fire()
 
-        harness.confirmation.handleToggleResult(.mic, requestId: "r1", ok: true, newState: true, reason: nil)
+        harness.confirm(.mic, "r1", newState: true)
 
         XCTAssertEqual(harness.feedbackEnds, 1)
         XCTAssertFalse(harness.confirmation.isShowingUnconfirmedFeedback)
-        XCTAssertTrue(harness.feedbackTimer()?.isCancelled ?? false)
+        XCTAssertTrue(harness.feedbackTimer().isCancelled)
     }
 
     func testLatePassiveUpdateReachingTheExpectedStateClearsTheFeedback() {
@@ -171,6 +243,7 @@ final class ToggleConfirmationTests: XCTestCase {
         harness.confirmation.handlePassiveUpdate(.mic, newState: true)
 
         XCTAssertEqual(harness.feedbackEnds, 1)
+        XCTAssertFalse(harness.confirmation.isShowingUnconfirmedFeedback)
     }
 
     func testFastDoublePressPassiveUpdateConfirmsOnlyTheExpectedState() {
@@ -188,9 +261,9 @@ final class ToggleConfirmationTests: XCTestCase {
     func testFastDoublePressLateSuccessOfFirstPressKeepsTheFeedbackOfTheSecond() {
         harness.confirmation.toggle(.mic)
         harness.confirmation.toggle(.mic)
-        harness.confirmation.handleToggleResult(.mic, requestId: "r2", ok: false, newState: nil, reason: "busy")
+        harness.fail(.mic, "r2", reason: "busy")
 
-        harness.confirmation.handleToggleResult(.mic, requestId: "r1", ok: true, newState: true, reason: nil)
+        harness.confirm(.mic, "r1", newState: true)
 
         XCTAssertEqual(harness.feedbackStarts, [.mic])
         XCTAssertEqual(harness.feedbackEnds, 0)
@@ -232,5 +305,49 @@ final class PendingToggleTrackerTests: XCTestCase {
         XCTAssertNil(tracker.resolve(.camera, requestId: "r0"))
         XCTAssertEqual(tracker.resolve(.camera, requestId: "r1")?.requestId, "r1")
         XCTAssertNil(tracker.pending[.camera])
+    }
+}
+
+final class ToggleResultParsingTests: XCTestCase {
+    func testParsesAConfirmedMicResultFromMuted() {
+        let result = ToggleResult(message: ["type": "toggle_result", "target": "mic", "ok": true, "muted": true, "requestId": "r1"])
+
+        XCTAssertEqual(result, ToggleResult(target: .mic, requestId: "r1", outcome: .confirmed(newState: true)))
+    }
+
+    func testParsesAConfirmedCameraResultFromOff() {
+        let result = ToggleResult(message: ["type": "toggle_result", "target": "camera", "ok": true, "off": false])
+
+        XCTAssertEqual(result, ToggleResult(target: .camera, requestId: nil, outcome: .confirmed(newState: false)))
+    }
+
+    func testIgnoresTheOtherTargetsStateKey() {
+        let result = ToggleResult(message: ["type": "toggle_result", "target": "camera", "ok": true, "muted": true])
+
+        XCTAssertEqual(result?.outcome, .failed(reason: "missing_state"))
+    }
+
+    func testTreatsOkWithoutStateAsMissingState() {
+        let result = ToggleResult(message: ["type": "toggle_result", "target": "mic", "ok": true, "requestId": "r1"])
+
+        XCTAssertEqual(result, ToggleResult(target: .mic, requestId: "r1", outcome: .failed(reason: "missing_state")))
+    }
+
+    func testParsesAFailureWithItsReason() {
+        let result = ToggleResult(message: ["type": "toggle_result", "target": "mic", "ok": false, "reason": "no_meet_tab"])
+
+        XCTAssertEqual(result?.outcome, .failed(reason: "no_meet_tab"))
+    }
+
+    func testUsesUnknownWhenAFailureHasNoReason() {
+        let result = ToggleResult(message: ["type": "toggle_result", "target": "camera", "ok": false])
+
+        XCTAssertEqual(result?.outcome, .failed(reason: "unknown"))
+    }
+
+    func testRejectsMalformedResults() {
+        XCTAssertNil(ToggleResult(message: ["type": "toggle_result", "ok": true, "muted": true]))
+        XCTAssertNil(ToggleResult(message: ["type": "toggle_result", "target": "speaker", "ok": true]))
+        XCTAssertNil(ToggleResult(message: ["type": "toggle_result", "target": "mic", "muted": true]))
     }
 }

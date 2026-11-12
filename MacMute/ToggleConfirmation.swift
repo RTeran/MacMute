@@ -44,6 +44,52 @@ struct PendingToggleTracker {
     }
 }
 
+/// A `toggle_result` from the extension. `newState` is `true` when the mic is muted or the camera is off.
+struct ToggleResult: Equatable {
+    enum Outcome: Equatable {
+        case confirmed(newState: Bool)
+        case failed(reason: String)
+    }
+
+    let target: ToggleTarget
+    let requestId: String?
+    let outcome: Outcome
+
+    init(target: ToggleTarget, requestId: String?, outcome: Outcome) {
+        self.target = target
+        self.requestId = requestId
+        self.outcome = outcome
+    }
+
+    init?(message: [String: Any]) {
+        guard let targetName = message["target"] as? String,
+              let target = ToggleTarget(rawValue: targetName),
+              let ok = message["ok"] as? Bool else { return nil }
+
+        self.target = target
+        self.requestId = message["requestId"] as? String
+
+        let stateKey = target == .mic ? "muted" : "off"
+        if !ok {
+            outcome = .failed(reason: message["reason"] as? String ?? "unknown")
+        } else if let newState = message[stateKey] as? Bool {
+            outcome = .confirmed(newState: newState)
+        } else {
+            outcome = .failed(reason: "missing_state")
+        }
+    }
+}
+
+enum ToggleSendOutcome: Equatable {
+    case sent
+    case failed(reason: String)
+}
+
+enum ToggleTimerKind {
+    case confirmation
+    case unconfirmedFeedback
+}
+
 protocol ToggleTimer {
     func cancel()
 }
@@ -53,8 +99,10 @@ extension DispatchWorkItem: ToggleTimer {}
 /// Decides when a toggle counts as confirmed and when to show the unconfirmed (amber) feedback.
 /// Runs on a single queue (main in the app); timers, sending and request ids are injected for tests.
 final class ToggleConfirmation {
-    typealias Send = (_ target: ToggleTarget, _ requestId: String, _ completion: @escaping (Bool) -> Void) -> Void
-    typealias Schedule = (_ delay: TimeInterval, _ work: @escaping () -> Void) -> ToggleTimer
+    typealias Send = (
+        _ target: ToggleTarget, _ requestId: String, _ completion: @escaping (ToggleSendOutcome) -> Void
+    ) -> Void
+    typealias Schedule = (_ kind: ToggleTimerKind, _ delay: TimeInterval, _ work: @escaping () -> Void) -> ToggleTimer
 
     var onUnconfirmedFeedbackStart: ((ToggleTarget) -> Void)?
     var onUnconfirmedFeedbackEnd: (() -> Void)?
@@ -89,7 +137,9 @@ final class ToggleConfirmation {
         self.makeRequestId = makeRequestId
     }
 
-    static func scheduleOnMain(after delay: TimeInterval, _ work: @escaping () -> Void) -> ToggleTimer {
+    static func scheduleOnMain(
+        _ kind: ToggleTimerKind, after delay: TimeInterval, _ work: @escaping () -> Void
+    ) -> ToggleTimer {
         let item = DispatchWorkItem(block: work)
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
         return item
@@ -100,35 +150,41 @@ final class ToggleConfirmation {
         let toggle = pendingToggles.begin(target, requestId: requestId, confirmedState: confirmedState(target))
 
         confirmationTimers[target]?.cancel()
-        confirmationTimers[target] = schedule(confirmationTimeout) { [weak self] in
+        confirmationTimers[target] = schedule(.confirmation, confirmationTimeout) { [weak self] in
             self?.fail(target, requestId: requestId, reason: "timeout")
         }
         logger.debug("Toggle \(target.rawValue, privacy: .public) sent, request \(requestId, privacy: .public), expected \(toggle.expected)")
 
-        send(target, requestId) { [weak self] sent in
-            if !sent {
-                self?.fail(target, requestId: requestId, reason: "no_socket_client")
+        send(target, requestId) { [weak self] outcome in
+            if case let .failed(reason) = outcome {
+                self?.fail(target, requestId: requestId, reason: reason)
             }
         }
     }
 
-    /// `newState` is `true` when the mic is muted or the camera is off.
-    func handleToggleResult(_ target: ToggleTarget, requestId: String?, ok: Bool, newState: Bool?, reason: String?) {
-        if let requestId = requestId {
-            if ok {
-                if let toggle = pendingToggles.resolve(target, requestId: requestId) {
-                    confirmed(target, toggle)
-                }
-            } else {
-                fail(target, requestId: requestId, reason: reason ?? "unknown")
-            }
-        } else {
-            logger.warning("toggle_result for \(target.rawValue, privacy: .public) without requestId, not matched to a pending toggle")
-        }
+    func handle(_ result: ToggleResult) {
+        let target = result.target
+        switch (result.outcome, result.requestId) {
+        case let (.failed(reason), requestId?):
+            fail(target, requestId: requestId, reason: reason)
 
-        // A late success after the timeout still carries the real state.
-        if ok, let newState = newState {
+        case let (.failed(reason), nil):
+            logger.warning("toggle_result failure for \(target.rawValue, privacy: .public) without requestId (\(reason, privacy: .public)), not matched to a pending toggle")
+
+        case let (.confirmed(newState), requestId?):
+            if let toggle = pendingToggles.resolve(target, requestId: requestId) {
+                if newState == toggle.expected {
+                    confirmed(target, toggle)
+                } else {
+                    unconfirm(target, toggle, reason: "unexpected_state")
+                }
+            }
+            // A late success after the timeout still carries the real state.
             endUnconfirmedFeedback(for: target, reached: newState)
+
+        case let (.confirmed(newState), nil):
+            logger.warning("toggle_result for \(target.rawValue, privacy: .public) without requestId, matching it as a passive update")
+            handlePassiveUpdate(target, newState: newState)
         }
     }
 
@@ -147,9 +203,17 @@ final class ToggleConfirmation {
 
     private func fail(_ target: ToggleTarget, requestId: String, reason: String) {
         guard let toggle = pendingToggles.resolve(target, requestId: requestId) else {
-            logger.debug("Ignoring stale \(target.rawValue, privacy: .public) failure (\(reason, privacy: .public)), request \(requestId, privacy: .public)")
+            if unconfirmed?.toggle.requestId == requestId {
+                logger.error("Toggle \(target.rawValue, privacy: .public) already unconfirmed; real reason \(reason, privacy: .public), request \(requestId, privacy: .public)")
+            } else {
+                logger.notice("Ignoring stale \(target.rawValue, privacy: .public) failure (\(reason, privacy: .public)), request \(requestId, privacy: .public)")
+            }
             return
         }
+        unconfirm(target, toggle, reason: reason)
+    }
+
+    private func unconfirm(_ target: ToggleTarget, _ toggle: PendingToggleTracker.Pending, reason: String) {
         confirmationTimers.removeValue(forKey: target)?.cancel()
         logger.error("Toggle \(target.rawValue, privacy: .public) unconfirmed (\(reason, privacy: .public)), request \(toggle.requestId, privacy: .public)")
         startUnconfirmedFeedback(for: target, toggle)
@@ -157,7 +221,7 @@ final class ToggleConfirmation {
 
     private func startUnconfirmedFeedback(for target: ToggleTarget, _ toggle: PendingToggleTracker.Pending) {
         unconfirmed?.end.cancel()
-        let end = schedule(feedbackDuration) { [weak self] in
+        let end = schedule(.unconfirmedFeedback, feedbackDuration) { [weak self] in
             self?.endUnconfirmedFeedback()
         }
         unconfirmed = (target, toggle, end)
