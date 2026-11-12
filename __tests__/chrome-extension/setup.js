@@ -34,3 +34,7 @@ global.createChromeMock = () => ({
 });
 
 global.chrome = global.createChromeMock();
+
+beforeEach(() => {
+  jest.spyOn(console, "debug").mockImplementation(() => {});
+});

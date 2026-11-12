@@ -105,8 +105,8 @@
     return null;
   }
 
-  // Shorter than the app's confirmation timeout so the answer reaches the app in time,
-  // even though Chrome aligns timers in hidden tabs to ~1 s.
+  // Worst case in a hidden tab: this wait, rounded up by Chrome's ~1 s timer alignment,
+  // plus the background's 200 ms reinjection delay. The app waits 2.5 s, so it must stay below that.
   const STATE_CHANGE_TIMEOUT_MS = 1200;
 
   const STATE_OBSERVER_OPTIONS = {
@@ -116,58 +116,76 @@
     attributeFilter: ["data-is-muted", "aria-label", "aria-pressed"],
   };
 
+  const togglesInProgress = new Set();
+
   function toggleControl(target, findButton, readState, timeoutMs) {
     return new Promise((resolve) => {
       const startedAt = Date.now();
       const visibility = document.visibilityState;
+      let settled = false;
+      let timer = null;
+      let observer = null;
 
       function finish(result) {
+        if (settled) return;
+        settled = true;
+        observer?.disconnect();
+        clearTimeout(timer);
+        togglesInProgress.delete(target);
         const fullResult = { ...result, visibility, elapsedMs: Date.now() - startedAt };
         console.debug(`MacMute: ${target} toggle result`, fullResult);
         resolve(fullResult);
       }
 
-      const button = findButton();
-      if (!button) {
-        finish({ ok: false, reason: "button_not_found", before: null, after: null });
+      // A second click while the first is unconfirmed would undo it.
+      if (togglesInProgress.has(target)) {
+        const busy = { ok: false, reason: "busy", before: null, after: null, visibility, elapsedMs: 0 };
+        console.debug(`MacMute: ${target} toggle result`, busy);
+        resolve(busy);
         return;
       }
+      togglesInProgress.add(target);
 
-      const before = readState();
-      if (before === null) {
-        finish({ ok: false, reason: "state_unknown", before: null, after: null });
-        return;
-      }
-
-      let settled = false;
-      let timer = null;
-      const observer = new MutationObserver(checkFlip);
-
-      function settle(result) {
-        if (settled) return;
-        settled = true;
-        observer.disconnect();
-        clearTimeout(timer);
-        finish(result);
-      }
-
-      function checkFlip() {
-        const after = readState();
-        if (after !== null && after !== before) {
-          settle({ ok: true, before, after });
+      try {
+        const button = findButton();
+        if (!button) {
+          finish({ ok: false, reason: "button_not_found", before: null, after: null });
+          return;
         }
-      }
 
-      observer.observe(document.body, STATE_OBSERVER_OPTIONS);
-      timer = setTimeout(() => {
+        const before = readState();
+        if (before === null) {
+          finish({ ok: false, reason: "state_unknown", before: null, after: null });
+          return;
+        }
+
+        const checkFlip = () => {
+          const after = readState();
+          if (after !== null && after !== before) {
+            finish({ ok: true, before, after });
+          }
+        };
+
+        observer = new MutationObserver(checkFlip);
+        observer.observe(document.body, STATE_OBSERVER_OPTIONS);
+        timer = setTimeout(() => {
+          checkFlip();
+          finish({ ok: false, reason: "timeout", before, after: readState() });
+        }, timeoutMs);
+
+        console.debug(`MacMute: ${target} click`, { before, visibility, at: startedAt });
+        button.click();
         checkFlip();
-        settle({ ok: false, reason: "timeout", before, after: readState() });
-      }, timeoutMs);
-
-      console.debug(`MacMute: ${target} click`, { before, visibility, at: startedAt });
-      button.click();
-      checkFlip();
+      } catch (error) {
+        finish({ ok: false, reason: "exception", error: error.message, before: null, after: null });
+      }
     });
+  }
+
+  function respondWith(toggle, sendResponse) {
+    toggle.then(sendResponse, (error) =>
+      sendResponse({ ok: false, reason: "exception", error: error?.message })
+    );
   }
 
   function toggleMute(timeoutMs = STATE_CHANGE_TIMEOUT_MS) {
@@ -190,7 +208,7 @@
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message.type) {
       case "toggle":
-        toggleMute().then(sendResponse);
+        respondWith(toggleMute(), sendResponse);
         return true;
 
       case "get_state":
@@ -202,7 +220,7 @@
         break;
 
       case "toggle_camera":
-        toggleCamera().then(sendResponse);
+        respondWith(toggleCamera(), sendResponse);
         return true;
 
       case "get_camera_state":
