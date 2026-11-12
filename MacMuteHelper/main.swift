@@ -119,7 +119,7 @@ class SocketClient {
         }
 
         guard connectResult == 0 else {
-            HelperLog.logger.info("Failed to connect to socket at \(self.socketPath, privacy: .public): \(String(cString: strerror(errno)), privacy: .public)")
+            HelperLog.logger.info("Failed to connect to socket \((self.socketPath as NSString).lastPathComponent, privacy: .public): \(String(cString: strerror(errno)), privacy: .public)")
             close(socketFD)
             socketFD = -1
             return false

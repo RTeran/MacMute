@@ -191,7 +191,7 @@ class GlobalShortcutManager {
             }
             return nil // Consume the event
         case let .modifiersMismatch(target):
-            logger.info("\(target.rawValue, privacy: .public) shortcut key pressed with modifiers \(Self.describe(event.flags.intersection(ShortcutMatcher.relevantModifiers)), privacy: .public), not matching")
+            logger.debug("\(target.rawValue, privacy: .public) shortcut key pressed with modifiers \(Self.describe(event.flags.intersection(ShortcutMatcher.relevantModifiers)), privacy: .public), not matching")
             return Unmanaged.passRetained(event)
         case .none:
             return Unmanaged.passRetained(event)

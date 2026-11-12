@@ -30,6 +30,9 @@ class SocketServer {
         self.socketPath = socketPath
     }
 
+    // The full path contains the user name.
+    private var socketName: String { (socketPath as NSString).lastPathComponent }
+
     func start() {
         queue.async { [weak self] in
             self?.startServer()
@@ -39,6 +42,7 @@ class SocketServer {
     // Each fd is closed by its own source's cancel handler: closing it here first makes libdispatch
     // report a vanished resource, and the fd number could be reused before the handler runs.
     func stop() {
+        dispatchPrecondition(condition: .notOnQueue(queue))
         queue.sync {
             listenSource?.cancel()
             listenSource = nil
@@ -125,7 +129,7 @@ class SocketServer {
         }
 
         guard bindResult == 0 else {
-            logger.error("Failed to bind socket at \(self.socketPath, privacy: .public): \(String(cString: strerror(errno)), privacy: .public)")
+            logger.error("Failed to bind socket \(self.socketName, privacy: .public): \(String(cString: strerror(errno)), privacy: .public)")
             close(serverSocket)
             return
         }
@@ -136,7 +140,7 @@ class SocketServer {
             return
         }
 
-        logger.notice("Socket server listening at \(self.socketPath, privacy: .public)")
+        logger.notice("Socket server listening on \(self.socketName, privacy: .public)")
 
         let listeningSocket = serverSocket
         let source = DispatchSource.makeReadSource(fileDescriptor: listeningSocket, queue: queue)
