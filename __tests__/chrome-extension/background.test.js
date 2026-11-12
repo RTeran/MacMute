@@ -184,6 +184,32 @@ describe("camera toggle", () => {
   });
 });
 
+describe("requestId echo", () => {
+  const cases = [
+    ["toggle", "success", { target: "mic", ok: true, muted: true }],
+    ["toggle", "no_meet_tab", { target: "mic", ok: false, reason: "no_meet_tab" }],
+    ["toggle", "tabs_query_failed", { target: "mic", ok: false, reason: "tabs_query_failed" }],
+    ["toggle_camera", "success", { target: "camera", ok: true, off: false }],
+    ["toggle_camera", "no_meet_tab", { target: "camera", ok: false, reason: "no_meet_tab" }],
+    ["toggle_camera", "tabs_query_failed", { target: "camera", ok: false, reason: "tabs_query_failed" }],
+  ];
+
+  test.each(cases)("%s echoes requestId on %s", async (type, outcome, expected) => {
+    if (outcome === "success") {
+      givenMeetTabs([{ id: 1 }]);
+      givenTabResponses({ 1: { ok: true, before: false, after: true } });
+    } else if (outcome === "no_meet_tab") {
+      givenMeetTabs([]);
+    } else {
+      chrome.tabs.query.mockRejectedValue(new Error("tabs unavailable"));
+    }
+
+    await background.handleNativeMessage({ type, requestId: "r1" });
+
+    expect(postedToggleResults()).toEqual([{ type: "toggle_result", ...expected, requestId: "r1" }]);
+  });
+});
+
 describe("content script injection", () => {
   test("injects the content script and retries once when the tab has no receiver", async () => {
     jest.useFakeTimers();
