@@ -246,6 +246,10 @@ describe("toggleMute", () => {
     expect(result).toEqual(expect.objectContaining({ ok: false, reason: "timeout" }));
   });
 
+  test("keeps the camera wait the app's ConfirmationTimeouts budget is built on", () => {
+    expect(script.CAMERA_STATE_CHANGE_TIMEOUT_MS).toBe(2500);
+  });
+
   test("resolves timeout with the unchanged state when the DOM never flips", async () => {
     document.body.innerHTML = '<button data-is-muted="false"></button>';
 
