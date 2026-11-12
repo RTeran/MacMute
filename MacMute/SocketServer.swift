@@ -55,12 +55,23 @@ class SocketServer {
         var messageData = data
         messageData.append(0x0A) // newline delimiter
 
-        let written = messageData.withUnsafeBytes { rawBuffer -> Int in
-            guard let ptr = rawBuffer.baseAddress else { return -1 }
-            return Darwin.write(clientSocket, ptr, messageData.count)
+        let total = messageData.count
+        let (written, writeErrno) = messageData.withUnsafeBytes { rawBuffer -> (Int, Int32?) in
+            guard let base = rawBuffer.baseAddress else { return (0, nil) }
+            var offset = 0
+            while offset < total {
+                let result = Darwin.write(clientSocket, base + offset, total - offset)
+                if result < 0 {
+                    if errno == EINTR { continue }
+                    return (offset, errno)
+                }
+                offset += result
+            }
+            return (offset, nil)
         }
-        guard written == messageData.count else {
-            NSLog("MacMute: Failed to write to socket: \(String(cString: strerror(errno)))")
+        guard written == total else {
+            let cause = writeErrno.map { String(cString: strerror($0)) } ?? "no buffer"
+            NSLog("MacMute: Failed to write to socket (\(written)/\(total) bytes): \(cause)")
             return false
         }
         NSLog("MacMute: Sent message to helper: \(message)")
@@ -132,6 +143,12 @@ class SocketServer {
             close(clientSocket)
         }
 
+        // Without this, writing to a helper that just died raises SIGPIPE and kills the app.
+        var noSigPipe: Int32 = 1
+        if setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size)) != 0 {
+            NSLog("MacMute: Failed to set SO_NOSIGPIPE: \(String(cString: strerror(errno)))")
+        }
+
         clientSocket = client
         NSLog("MacMute: Helper connected")
 
@@ -166,10 +183,12 @@ class SocketServer {
                 let messageData = buffer[buffer.startIndex..<newlineIndex]
                 buffer = Data(buffer[buffer.index(after: newlineIndex)...])
 
-                if let json = try? JSONSerialization.jsonObject(with: messageData) as? [String: Any] {
-                    DispatchQueue.main.async {
-                        self.onMessageReceived?(json)
-                    }
+                guard let json = try? JSONSerialization.jsonObject(with: messageData) as? [String: Any] else {
+                    NSLog("MacMute: Dropping undecodable message from helper: \(String(decoding: messageData, as: UTF8.self))")
+                    continue
+                }
+                DispatchQueue.main.async {
+                    self.onMessageReceived?(json)
                 }
             }
         }

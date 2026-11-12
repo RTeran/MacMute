@@ -89,6 +89,12 @@ class SocketClient {
             return false
         }
 
+        // Writing to an app that just quit must fail with EPIPE instead of killing the helper.
+        var noSigPipe: Int32 = 1
+        if setsockopt(socketFD, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size)) != 0 {
+            NSLog("MacMuteHelper: Failed to set SO_NOSIGPIPE: \(String(cString: strerror(errno)))")
+        }
+
         NSLog("MacMuteHelper: Connected to MacMute app")
         startReading()
         return true
@@ -146,9 +152,11 @@ class SocketClient {
                 let messageData = buffer[buffer.startIndex..<newlineIndex]
                 buffer = Data(buffer[buffer.index(after: newlineIndex)...])
 
-                if let json = try? JSONSerialization.jsonObject(with: messageData) as? [String: Any] {
-                    self.onMessageReceived?(json)
+                guard let json = try? JSONSerialization.jsonObject(with: messageData) as? [String: Any] else {
+                    NSLog("MacMuteHelper: Dropping undecodable message from app: \(String(decoding: messageData, as: UTF8.self))")
+                    continue
                 }
+                self.onMessageReceived?(json)
             }
         }
 
@@ -165,6 +173,9 @@ class SocketClient {
 }
 
 // MARK: - Main
+
+// Chrome closing stdout must surface as a write error, not a SIGPIPE that kills the helper.
+signal(SIGPIPE, SIG_IGN)
 
 let socketClient = SocketClient()
 
