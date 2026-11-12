@@ -349,7 +349,9 @@
 
   function queriedState(target, readState) {
     const mediaSessionState = mediaSessionSinceVisible[target];
-    if (document.visibilityState === "hidden" && mediaSessionState !== undefined) return mediaSessionState;
+    const trustMediaSession =
+      document.visibilityState === "hidden" && mediaSessionState !== undefined && findButtonFor[target]();
+    if (trustMediaSession) return mediaSessionState;
     return readState();
   }
 

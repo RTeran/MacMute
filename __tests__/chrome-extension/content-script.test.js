@@ -1213,6 +1213,15 @@ describe("state queries while the page is hidden", () => {
     expect(chrome.runtime.sendMessage).toHaveBeenLastCalledWith({ type: "camera_state_update", active: false });
   });
 
+  test("does not answer get_state with a media session state when the mic button is gone", () => {
+    setVisibility("hidden");
+    postMediaSession({ type: MEDIA_SESSION, kind: "mic", active: false });
+
+    messageListener({ type: "get_state" }, {}, jest.fn());
+
+    expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
+  });
+
   test("answers get_state from the DOM while the page is visible", () => {
     document.body.innerHTML = '<button data-is-muted="false"></button>';
     postMediaSession({ type: MEDIA_SESSION, kind: "mic", active: false });
