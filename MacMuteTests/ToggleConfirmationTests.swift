@@ -315,6 +315,12 @@ final class ToggleResultParsingTests: XCTestCase {
         XCTAssertEqual(result, ToggleResult(target: .mic, requestId: "r1", outcome: .confirmed(newState: true)))
     }
 
+    func testParsesTheSourceThatConfirmedTheToggle() {
+        let result = ToggleResult(message: ["type": "toggle_result", "target": "mic", "ok": true, "muted": false, "source": "media_session"])
+
+        XCTAssertEqual(result?.source, "media_session")
+    }
+
     func testParsesAConfirmedCameraResultFromOff() {
         let result = ToggleResult(message: ["type": "toggle_result", "target": "camera", "ok": true, "off": false])
 
