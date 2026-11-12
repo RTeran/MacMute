@@ -25,20 +25,56 @@ class NativeMessaging {
     }
 
     static func writeMessage(_ message: [String: Any]) {
-        guard let data = try? JSONSerialization.data(withJSONObject: message) else { return }
+        let data: Data
+        do {
+            data = try JSONSerialization.data(withJSONObject: message)
+        } catch {
+            NSLog("MacMuteHelper: Failed to serialize message for Chrome \(message): \(error)")
+            return
+        }
 
         let length = UInt32(data.count)
-        var lengthBytes = [UInt8](repeating: 0, count: 4)
-        lengthBytes[0] = UInt8(length & 0xFF)
-        lengthBytes[1] = UInt8((length >> 8) & 0xFF)
-        lengthBytes[2] = UInt8((length >> 16) & 0xFF)
-        lengthBytes[3] = UInt8((length >> 24) & 0xFF)
+        let lengthBytes: [UInt8] = [
+            UInt8(length & 0xFF),
+            UInt8((length >> 8) & 0xFF),
+            UInt8((length >> 16) & 0xFF),
+            UInt8((length >> 24) & 0xFF),
+        ]
 
-        fwrite(lengthBytes, 1, 4, stdout)
-        _ = data.withUnsafeBytes { rawBuffer in
+        let headerWritten = fwrite(lengthBytes, 1, 4, stdout)
+        let bodyWritten = data.withUnsafeBytes { rawBuffer in
             fwrite(rawBuffer.baseAddress, 1, data.count, stdout)
         }
-        fflush(stdout)
+        guard headerWritten == 4, bodyWritten == data.count, fflush(stdout) == 0 else {
+            failStdoutWrite(written: headerWritten + bodyWritten, total: 4 + data.count)
+            return
+        }
+    }
+
+    // Chrome closes the pipe when the extension disconnects; there is nobody left to relay to.
+    private static func failStdoutWrite(written: Int, total: Int) {
+        let code = errno
+        NSLog("MacMuteHelper: Failed to write to Chrome (\(written)/\(total) bytes): \(String(cString: strerror(code)))")
+        if code == EPIPE {
+            exit(1)
+        }
+        clearerr(stdout)
+    }
+}
+
+func writeFully(_ fd: Int32, _ data: Data) -> (written: Int, errno: Int32?) {
+    data.withUnsafeBytes { rawBuffer in
+        guard let base = rawBuffer.baseAddress else { return (0, nil) }
+        var offset = 0
+        while offset < data.count {
+            let result = Darwin.write(fd, base + offset, data.count - offset)
+            if result < 0 {
+                if errno == EINTR { continue }
+                return (offset, errno)
+            }
+            offset += result
+        }
+        return (offset, nil)
     }
 }
 
@@ -115,16 +151,19 @@ class SocketClient {
                 return
             }
 
-            guard let data = try? JSONSerialization.data(withJSONObject: message) else { return }
-            var messageData = data
+            var messageData: Data
+            do {
+                messageData = try JSONSerialization.data(withJSONObject: message)
+            } catch {
+                NSLog("MacMuteHelper: Failed to serialize message for app \(message): \(error)")
+                return
+            }
             messageData.append(0x0A) // newline delimiter
 
-            messageData.withUnsafeBytes { rawBuffer in
-                guard let ptr = rawBuffer.baseAddress else { return }
-                let written = Darwin.write(self.socketFD, ptr, messageData.count)
-                if written < 0 {
-                    NSLog("MacMuteHelper: Write to socket failed: \(String(cString: strerror(errno)))")
-                }
+            let (written, writeErrno) = writeFully(self.socketFD, messageData)
+            if written != messageData.count {
+                let cause = writeErrno.map { String(cString: strerror($0)) } ?? "no buffer"
+                NSLog("MacMuteHelper: Write to socket failed (\(written)/\(messageData.count) bytes): \(cause)")
             }
         }
     }
