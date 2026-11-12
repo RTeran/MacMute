@@ -22,6 +22,37 @@ enum ToggleTarget: String {
     }
 }
 
+/// Tracks the toggle waiting for confirmation per target. A state flag is `true` when the mic is
+/// muted or the camera is off.
+struct PendingToggleTracker {
+    struct Pending: Equatable {
+        let requestId: String
+        let expected: Bool
+    }
+
+    private(set) var pending: [ToggleTarget: Pending] = [:]
+
+    // A press made before the previous one is confirmed expects to undo that previous press.
+    mutating func begin(_ target: ToggleTarget, requestId: String, confirmedState: Bool) -> Pending {
+        let baseline = pending[target]?.expected ?? confirmedState
+        let toggle = Pending(requestId: requestId, expected: !baseline)
+        pending[target] = toggle
+        return toggle
+    }
+
+    mutating func resolve(_ target: ToggleTarget, requestId: String) -> Pending? {
+        guard let toggle = pending[target], toggle.requestId == requestId else { return nil }
+        pending[target] = nil
+        return toggle
+    }
+
+    mutating func resolvePassive(_ target: ToggleTarget, newState: Bool) -> Pending? {
+        guard let toggle = pending[target], toggle.expected == newState else { return nil }
+        pending[target] = nil
+        return toggle
+    }
+}
+
 class MuteStateManager: ObservableObject {
     static let shared = MuteStateManager()
 
@@ -41,23 +72,20 @@ class MuteStateManager: ObservableObject {
         }
     }
 
-    // Longer than the content script wait (1200 ms) so its answer can still arrive in time.
-    static let toggleConfirmationTimeout: TimeInterval = 1.5
+    // Covers the content script wait (1200 ms) rounded up by hidden-tab timer alignment (~1 s)
+    // plus the 200 ms reinjection delay.
+    static let toggleConfirmationTimeout: TimeInterval = 2.5
     static let unconfirmedFeedbackDuration: TimeInterval = 3
     private static let unconfirmedColor = NSColor.systemOrange.withAlphaComponent(0.85)
-
-    private struct PendingToggle {
-        let requestId: String
-        let timeout: DispatchWorkItem
-    }
 
     private let socketServer = SocketServer()
     private let overlayManager = MenuBarOverlayManager()
     private let shortcutManager = GlobalShortcutManager.shared
     private let logger = Logger(subsystem: "com.macmute.app", category: "toggle")
-    private var pendingToggles: [ToggleTarget: PendingToggle] = [:]
+    private var pendingToggles = PendingToggleTracker()
+    private var toggleTimeouts: [ToggleTarget: DispatchWorkItem] = [:]
     private var unconfirmedFeedbackEnd: DispatchWorkItem?
-    private var unconfirmedTarget: ToggleTarget?
+    private var unconfirmedToggle: (target: ToggleTarget, toggle: PendingToggleTracker.Pending)?
 
     private init() {
         micMutedColor = loadColor(forKey: "micMutedColorData", default: .red)
@@ -102,11 +130,13 @@ class MuteStateManager: ObservableObject {
 
     private func sendToggle(_ target: ToggleTarget) {
         let requestId = UUID().uuidString
-        pendingToggles[target]?.timeout.cancel()
+        let toggle = pendingToggles.begin(target, requestId: requestId, confirmedState: confirmedState(of: target))
+
+        toggleTimeouts[target]?.cancel()
         let timeout = DispatchWorkItem { [weak self] in
             self?.failToggle(target, requestId: requestId, reason: "timeout")
         }
-        pendingToggles[target] = PendingToggle(requestId: requestId, timeout: timeout)
+        toggleTimeouts[target] = timeout
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.toggleConfirmationTimeout, execute: timeout)
 
         socketServer.sendMessage(["type": target.commandType, "requestId": requestId]) { [weak self] sent in
@@ -114,32 +144,36 @@ class MuteStateManager: ObservableObject {
                 self?.failToggle(target, requestId: requestId, reason: "no_socket_client")
             }
         }
-        logger.debug("Toggle \(target.rawValue, privacy: .public) sent, request \(requestId, privacy: .public)")
+        logger.debug("Toggle \(target.rawValue, privacy: .public) sent, request \(requestId, privacy: .public), expected \(toggle.expected)")
     }
 
-    private func confirmToggle(_ target: ToggleTarget, requestId: String?) {
-        guard let pending = pendingToggles[target],
-              requestId == nil || requestId == pending.requestId else { return }
-        pending.timeout.cancel()
-        pendingToggles[target] = nil
-        logger.debug("Toggle \(target.rawValue, privacy: .public) confirmed, request \(pending.requestId, privacy: .public)")
+    private func confirmedState(of target: ToggleTarget) -> Bool {
+        switch target {
+        case .mic: return isMuted
+        case .camera: return isCameraOff
+        }
     }
 
-    private func failToggle(_ target: ToggleTarget, requestId: String?, reason: String) {
-        guard let pending = pendingToggles[target],
-              requestId == nil || requestId == pending.requestId else {
-            logger.debug("Ignoring stale \(target.rawValue, privacy: .public) failure: \(reason, privacy: .public)")
+    private func settle(_ target: ToggleTarget, _ toggle: PendingToggleTracker.Pending) {
+        toggleTimeouts[target]?.cancel()
+        toggleTimeouts[target] = nil
+        logger.debug("Toggle \(target.rawValue, privacy: .public) confirmed, request \(toggle.requestId, privacy: .public)")
+    }
+
+    private func failToggle(_ target: ToggleTarget, requestId: String, reason: String) {
+        guard let toggle = pendingToggles.resolve(target, requestId: requestId) else {
+            logger.debug("Ignoring stale \(target.rawValue, privacy: .public) failure (\(reason, privacy: .public)), request \(requestId, privacy: .public)")
             return
         }
-        pending.timeout.cancel()
-        pendingToggles[target] = nil
-        logger.error("Toggle \(target.rawValue, privacy: .public) unconfirmed (\(reason, privacy: .public)), request \(pending.requestId, privacy: .public)")
-        startUnconfirmedFeedback(for: target)
+        toggleTimeouts[target]?.cancel()
+        toggleTimeouts[target] = nil
+        logger.error("Toggle \(target.rawValue, privacy: .public) unconfirmed (\(reason, privacy: .public)), request \(toggle.requestId, privacy: .public)")
+        startUnconfirmedFeedback(for: target, toggle)
     }
 
-    private func startUnconfirmedFeedback(for target: ToggleTarget) {
+    private func startUnconfirmedFeedback(for target: ToggleTarget, _ toggle: PendingToggleTracker.Pending) {
         unconfirmedFeedbackEnd?.cancel()
-        unconfirmedTarget = target
+        unconfirmedToggle = (target, toggle)
         let end = DispatchWorkItem { [weak self] in
             self?.endUnconfirmedFeedback()
         }
@@ -149,12 +183,19 @@ class MuteStateManager: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.unconfirmedFeedbackDuration, execute: end)
     }
 
-    private func endUnconfirmedFeedback(for target: ToggleTarget? = nil) {
-        guard let end = unconfirmedFeedbackEnd,
-              target == nil || target == unconfirmedTarget else { return }
+    // A state that is not the one the failed press wanted (e.g. the first press of a fast double
+    // press confirming late) must not hide the warning.
+    private func endUnconfirmedFeedback(for target: ToggleTarget, reached newState: Bool) {
+        guard let failed = unconfirmedToggle,
+              failed.target == target, failed.toggle.expected == newState else { return }
+        endUnconfirmedFeedback()
+    }
+
+    private func endUnconfirmedFeedback() {
+        guard let end = unconfirmedFeedbackEnd else { return }
         end.cancel()
         unconfirmedFeedbackEnd = nil
-        unconfirmedTarget = nil
+        unconfirmedToggle = nil
         overlayManager.hideUnconfirmed()
         NotificationCenter.default.post(name: .unconfirmedToggleFeedbackDidEnd, object: nil)
     }
@@ -168,31 +209,35 @@ class MuteStateManager: ObservableObject {
     }
 
     private func handleMessage(_ message: [String: Any]) {
-        guard let type = message["type"] as? String else { return }
+        guard let type = message["type"] as? String else {
+            logger.error("Message without type: \(String(describing: message), privacy: .public)")
+            return
+        }
 
         switch type {
         case "state_update":
             if let muted = message["muted"] as? Bool {
-                // A passive update that flips the state is as good as a toggle_result.
-                if muted != isMuted {
-                    confirmToggle(.mic, requestId: nil)
-                    endUnconfirmedFeedback(for: .mic)
-                }
+                handlePassiveUpdate(.mic, newState: muted)
                 updateMicState(muted: muted)
             }
         case "camera_state_update":
             if let active = message["active"] as? Bool {
-                if active == isCameraOff {
-                    confirmToggle(.camera, requestId: nil)
-                    endUnconfirmedFeedback(for: .camera)
-                }
+                handlePassiveUpdate(.camera, newState: !active)
                 updateCameraState(active: active)
             }
         case "toggle_result":
             handleToggleResult(message)
         default:
-            NSLog("MacMute: Unknown message type: \(type)")
+            logger.error("Unknown message type: \(type, privacy: .public)")
         }
+    }
+
+    // A passive update that reaches the state the pending press expects is as good as a toggle_result.
+    private func handlePassiveUpdate(_ target: ToggleTarget, newState: Bool) {
+        if let toggle = pendingToggles.resolvePassive(target, newState: newState) {
+            settle(target, toggle)
+        }
+        endUnconfirmedFeedback(for: target, reached: newState)
     }
 
     private func handleToggleResult(_ message: [String: Any]) {
@@ -202,21 +247,30 @@ class MuteStateManager: ObservableObject {
             logger.error("Malformed toggle_result: \(String(describing: message), privacy: .public)")
             return
         }
-        let requestId = message["requestId"] as? String
 
-        guard ok else {
-            failToggle(target, requestId: requestId, reason: message["reason"] as? String ?? "unknown")
-            return
+        if let requestId = message["requestId"] as? String {
+            if ok {
+                if let toggle = pendingToggles.resolve(target, requestId: requestId) {
+                    settle(target, toggle)
+                }
+            } else {
+                failToggle(target, requestId: requestId, reason: message["reason"] as? String ?? "unknown")
+            }
+        } else {
+            logger.warning("toggle_result without requestId, not matched to a pending toggle: \(String(describing: message), privacy: .public)")
         }
 
-        confirmToggle(target, requestId: requestId)
-        // A late success after the timeout still carries the real state, so apply it and end the warning.
-        endUnconfirmedFeedback(for: target)
+        guard ok else { return }
+        let stateKey = target == .mic ? "muted" : "off"
+        guard let newState = message[stateKey] as? Bool else {
+            logger.error("toggle_result ok without \(stateKey, privacy: .public): \(String(describing: message), privacy: .public)")
+            return
+        }
+        // A late success after the timeout still carries the real state.
+        endUnconfirmedFeedback(for: target, reached: newState)
         switch target {
-        case .mic:
-            if let muted = message["muted"] as? Bool { updateMicState(muted: muted) }
-        case .camera:
-            if let off = message["off"] as? Bool { updateCameraState(active: !off) }
+        case .mic: updateMicState(muted: newState)
+        case .camera: updateCameraState(active: !newState)
         }
     }
 
