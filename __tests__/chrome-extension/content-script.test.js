@@ -181,6 +181,7 @@ describe("toggleMute", () => {
   });
 
   afterEach(() => {
+    jest.runOnlyPendingTimers();
     jest.useRealTimers();
     console.debug.mockRestore();
   });
@@ -272,6 +273,7 @@ describe("message listener", () => {
   });
 
   afterEach(() => {
+    jest.runOnlyPendingTimers();
     jest.useRealTimers();
     document.body.innerHTML = "";
     script._setState(null);
@@ -506,6 +508,7 @@ describe("toggleCamera", () => {
   });
 
   afterEach(() => {
+    jest.runOnlyPendingTimers();
     jest.useRealTimers();
     console.debug.mockRestore();
   });
@@ -550,6 +553,7 @@ describe("message listener — camera", () => {
   });
 
   afterEach(() => {
+    jest.runOnlyPendingTimers();
     jest.useRealTimers();
     document.body.innerHTML = "";
     script._setState(null);

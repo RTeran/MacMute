@@ -110,11 +110,30 @@ function buildToggleResult(target, aggregated, requestId) {
   return result;
 }
 
+// Resolves with the first confirmed tab, or with every response once all tabs have answered.
+function collectTabResponses(tabs, message) {
+  return new Promise((resolve) => {
+    const responses = [];
+    let pending = tabs.length;
+    if (pending === 0) resolve(responses);
+
+    for (const tab of tabs) {
+      sendToTab(tab.id, message)
+        .then((value) => ({ status: "fulfilled", value }), (reason) => ({ status: "rejected", reason }))
+        .then((settled) => {
+          const response = toTabResponse(settled);
+          responses.push(response);
+          pending -= 1;
+          if (response.ok === true || pending === 0) resolve(responses);
+        });
+    }
+  });
+}
+
 async function toggleInMeetTabs(type, requestId) {
   const target = TOGGLE_TARGETS[type];
   const tabs = await chrome.tabs.query({ url: MEET_URL_PATTERN });
-  const settled = await Promise.allSettled(tabs.map((tab) => sendToTab(tab.id, { type })));
-  const responses = settled.map(toTabResponse);
+  const responses = await collectTabResponses(tabs, { type });
   const result = buildToggleResult(target, aggregateTabResponses(responses), requestId);
 
   console.debug("MacMute: Toggle result", { result, tabIds: tabs.map((tab) => tab.id), responses });

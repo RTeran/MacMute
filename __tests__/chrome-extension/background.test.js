@@ -91,6 +91,19 @@ describe("mic toggle", () => {
     ]);
   });
 
+  test("reports as soon as one tab confirms, without waiting for slower tabs", async () => {
+    givenMeetTabs([{ id: 1 }, { id: 2 }]);
+    chrome.tabs.sendMessage.mockImplementation((tabId) =>
+      tabId === 1 ? Promise.resolve({ ok: true, before: false, after: true }) : new Promise(() => {})
+    );
+
+    await background.handleNativeMessage({ type: "toggle" });
+
+    expect(postedToggleResults()).toEqual([
+      { type: "toggle_result", target: "mic", ok: true, muted: true },
+    ]);
+  });
+
   test("prefers a real failure reason over button_not_found when no tab confirms", async () => {
     givenMeetTabs([{ id: 1 }, { id: 2 }]);
     givenTabResponses({
