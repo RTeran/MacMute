@@ -106,7 +106,7 @@
   }
 
   // Worst case in a hidden tab: this wait, rounded up by Chrome's ~1 s timer alignment,
-  // plus the background's 200 ms reinjection delay. The app waits 2.5 s, so it must stay below that.
+  // plus the background's 200 ms reinjection delay. The app waits 3 s, so it must stay below that.
   const STATE_CHANGE_TIMEOUT_MS = 1200;
 
   const STATE_OBSERVER_OPTIONS = {
@@ -117,6 +117,16 @@
   };
 
   const togglesInProgress = new Set();
+
+  // Same message type as media-session-bridge.js, which runs in the page's MAIN world.
+  const MEDIA_SESSION_MESSAGE_TYPE = "macmute:media-session";
+  const mediaSessionWaiters = { mic: null, camera: null };
+
+  // Maps "is the device active" to the state each target reads: mic → muted, camera → active.
+  const stateFromMediaSession = {
+    mic: (active) => !active,
+    camera: (active) => active,
+  };
 
   function toggleControl(target, findButton, readState, timeoutMs) {
     return new Promise((resolve) => {
@@ -131,6 +141,7 @@
         settled = true;
         observer?.disconnect();
         clearTimeout(timer);
+        mediaSessionWaiters[target] = null;
         togglesInProgress.delete(target);
         const fullResult = { ...result, visibility, elapsedMs: Date.now() - startedAt };
         console.debug(`MacMute: ${target} toggle result`, fullResult);
@@ -172,7 +183,13 @@
         const checkFlip = () => {
           const after = readState();
           if (after !== null && after !== before) {
-            finish({ ok: true, before, after });
+            finish({ ok: true, before, after, source: "dom" });
+          }
+        };
+
+        mediaSessionWaiters[target] = (state) => {
+          if (state !== before) {
+            finish({ ok: true, before, after: state, source: "media_session" });
           }
         };
 
@@ -245,6 +262,36 @@
         break;
     }
     return false;
+  });
+
+  function isMediaSessionMessage(event) {
+    const data = event.data;
+    return (
+      event.source === window &&
+      data !== null &&
+      typeof data === "object" &&
+      data.type === MEDIA_SESSION_MESSAGE_TYPE &&
+      Object.hasOwn(stateFromMediaSession, data.kind) &&
+      typeof data.active === "boolean"
+    );
+  }
+
+  // Meet's own page can forge this message; that is acceptable, so only its shape is checked.
+  window.addEventListener("message", (event) => {
+    if (!isMediaSessionMessage(event)) return;
+    const { kind, active } = event.data;
+    const state = stateFromMediaSession[kind](active);
+    console.debug(`MacMute: media session ${kind} active=${active}`);
+
+    mediaSessionWaiters[kind]?.(state);
+
+    if (kind === "mic" && state !== currentMuteState) {
+      currentMuteState = state;
+      sendStateUpdate(state);
+    } else if (kind === "camera" && state !== currentCameraState) {
+      currentCameraState = state;
+      sendCameraStateUpdate(state);
+    }
   });
 
   // Observe DOM for mute button appearance and state changes
