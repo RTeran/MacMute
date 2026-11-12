@@ -32,31 +32,39 @@ class SocketServer {
         unlink(socketPath)
     }
 
-    func sendMessage(_ message: [String: Any]) {
+    /// `completion` runs on the main queue with `false` when no helper is connected or the write fails.
+    func sendMessage(_ message: [String: Any], completion: ((Bool) -> Void)? = nil) {
         queue.async { [weak self] in
-            guard let self = self, self.clientSocket >= 0 else {
-                NSLog("MacMute: No client connected, cannot send message")
-                return
-            }
-
-            do {
-                let data = try JSONSerialization.data(withJSONObject: message)
-                var messageData = data
-                messageData.append(0x0A) // newline delimiter
-
-                messageData.withUnsafeBytes { rawBuffer in
-                    guard let ptr = rawBuffer.baseAddress else { return }
-                    let written = Darwin.write(self.clientSocket, ptr, messageData.count)
-                    if written < 0 {
-                        NSLog("MacMute: Failed to write to socket: \(String(cString: strerror(errno)))")
-                    } else {
-                        NSLog("MacMute: Sent message to helper: \(message)")
-                    }
-                }
-            } catch {
-                NSLog("MacMute: Failed to serialize message: \(error)")
+            let sent = self?.write(message) ?? false
+            if let completion = completion {
+                DispatchQueue.main.async { completion(sent) }
             }
         }
+    }
+
+    private func write(_ message: [String: Any]) -> Bool {
+        guard clientSocket >= 0 else {
+            NSLog("MacMute: No client connected, cannot send message")
+            return false
+        }
+
+        guard let data = try? JSONSerialization.data(withJSONObject: message) else {
+            NSLog("MacMute: Failed to serialize message: \(message)")
+            return false
+        }
+        var messageData = data
+        messageData.append(0x0A) // newline delimiter
+
+        let written = messageData.withUnsafeBytes { rawBuffer -> Int in
+            guard let ptr = rawBuffer.baseAddress else { return -1 }
+            return Darwin.write(clientSocket, ptr, messageData.count)
+        }
+        guard written == messageData.count else {
+            NSLog("MacMute: Failed to write to socket: \(String(cString: strerror(errno)))")
+            return false
+        }
+        NSLog("MacMute: Sent message to helper: \(message)")
+        return true
     }
 
     private func startServer() {
