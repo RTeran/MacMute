@@ -38,6 +38,7 @@ final class SocketServerTests: XCTestCase {
         XCTAssertEqual(readLine(from: first), #"{"type":"ping"}"#)
         close(first)
         clients.removeAll { $0 == first }
+        waitUntilNoHelperIsConnected()
 
         let second = connectHelper()
 
@@ -68,6 +69,15 @@ final class SocketServerTests: XCTestCase {
         clients.append(fd)
         wait(for: [connected], timeout: 2)
         return fd
+    }
+
+    private func waitUntilNoHelperIsConnected(file: StaticString = #filePath, line: UInt = #line) {
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            if send(["type": "probe"]) == "no_socket_client" { return }
+            usleep(10_000)
+        }
+        XCTFail("The server never noticed the helper dropped", file: file, line: line)
     }
 
     private func send(_ message: [String: Any]) -> String? {
