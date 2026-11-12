@@ -6,19 +6,26 @@
   const WRAPPED = Symbol.for("macmute.mediaSessionWrapped");
 
   const proto = typeof MediaSession === "function" ? MediaSession.prototype : null;
-  if (!proto) return;
+  if (!proto) {
+    console.warn("MacMute: Media Session API not available, toggles fall back to the DOM");
+    return;
+  }
 
   function forward(kind, active) {
     try {
       window.postMessage({ type: MESSAGE_TYPE, kind, active }, window.location.origin);
     } catch (error) {
-      console.debug("MacMute: could not forward media session state", error);
+      console.warn("MacMute: could not forward media session state", error);
     }
   }
 
   function wrap(method, kind) {
     const original = proto[method];
-    if (typeof original !== "function" || original[WRAPPED]) return;
+    if (typeof original !== "function") {
+      console.warn(`MacMute: MediaSession.${method} not available, ${kind} toggles fall back to the DOM`);
+      return;
+    }
+    if (original[WRAPPED]) return;
 
     const wrapper = function (active) {
       const result = original.apply(this, arguments);

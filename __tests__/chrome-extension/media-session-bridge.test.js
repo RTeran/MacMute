@@ -10,9 +10,11 @@ function loadBridge() {
 }
 
 let postMessage;
+let warn;
 
 beforeEach(() => {
   postMessage = jest.spyOn(window, "postMessage").mockImplementation(() => {});
+  warn = jest.spyOn(console, "warn").mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -69,7 +71,7 @@ test("lets an error from the original method reach Meet and forwards nothing", (
   expect(postMessage).not.toHaveBeenCalled();
 });
 
-test("does not break Meet when forwarding the message fails", () => {
+test("does not break Meet when forwarding the message fails, and warns", () => {
   givenMediaSession({ setMicrophoneActive: jest.fn(() => "ok") });
   postMessage.mockImplementation(() => {
     throw new Error("cannot post");
@@ -77,6 +79,18 @@ test("does not break Meet when forwarding the message fails", () => {
   loadBridge();
 
   expect(new MediaSession().setMicrophoneActive(true)).toBe("ok");
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining("could not forward"), expect.any(Error));
+});
+
+test("forwards the boolean the browser would use for a missing or non-boolean argument", () => {
+  givenMediaSession({ setMicrophoneActive: jest.fn(), setCameraActive: jest.fn() });
+  loadBridge();
+
+  new MediaSession().setMicrophoneActive();
+  new MediaSession().setCameraActive(1);
+
+  expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ kind: "mic", active: false }), expect.anything());
+  expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ kind: "camera", active: true }), expect.anything());
 });
 
 test("wraps only once when the script runs twice", () => {
@@ -89,13 +103,23 @@ test("wraps only once when the script runs twice", () => {
   expect(postMessage).toHaveBeenCalledTimes(1);
 });
 
-test("does nothing when the Media Session API is missing", () => {
+test("warns and does nothing when the Media Session API is missing", () => {
   expect(loadBridge).not.toThrow();
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining("Media Session API not available"));
 });
 
-test("does not add a method the browser lacks", () => {
+test("warns and does not add a method the browser lacks", () => {
   givenMediaSession({ setMicrophoneActive: jest.fn() });
   loadBridge();
 
   expect(MediaSession.prototype.setCameraActive).toBeUndefined();
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining("setCameraActive"));
+});
+
+test("does not warn when every method is wrapped", () => {
+  givenMediaSession({ setMicrophoneActive: jest.fn(), setCameraActive: jest.fn() });
+  loadBridge();
+  loadBridge();
+
+  expect(warn).not.toHaveBeenCalled();
 });
