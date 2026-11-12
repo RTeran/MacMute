@@ -107,7 +107,10 @@
 
   // Worst case in a hidden tab: this wait, rounded up by Chrome's ~1 s timer alignment,
   // plus the background's 200 ms reinjection delay. The app waits 3 s, so it must stay below that.
-  const STATE_CHANGE_TIMEOUT_MS = 1200;
+  const MIC_STATE_CHANGE_TIMEOUT_MS = 1200;
+  // Turning the camera on in a hidden page takes ~1.2 s to warm up before Meet reports it. This
+  // can outlast the app's 3 s after timer alignment; a late success still clears the app's warning.
+  const CAMERA_STATE_CHANGE_TIMEOUT_MS = 2500;
 
   const STATE_OBSERVER_OPTIONS = {
     childList: true,
@@ -218,11 +221,11 @@
     );
   }
 
-  function toggleMute(timeoutMs = STATE_CHANGE_TIMEOUT_MS) {
+  function toggleMute(timeoutMs = MIC_STATE_CHANGE_TIMEOUT_MS) {
     return toggleControl("mic", findMuteButton, getMuteState, timeoutMs);
   }
 
-  function toggleCamera(timeoutMs = STATE_CHANGE_TIMEOUT_MS) {
+  function toggleCamera(timeoutMs = CAMERA_STATE_CHANGE_TIMEOUT_MS) {
     return toggleControl("camera", findCameraButton, getCameraState, timeoutMs);
   }
 
@@ -349,7 +352,8 @@
       toggleCamera,
       sendCameraStateUpdate,
       CAMERA_BUTTON_SELECTORS,
-      STATE_CHANGE_TIMEOUT_MS,
+      MIC_STATE_CHANGE_TIMEOUT_MS,
+      CAMERA_STATE_CHANGE_TIMEOUT_MS,
       _getObserver: () => observer,
       _getState: () => ({ currentMuteState, currentCameraState }),
       _setState: (s) => {

@@ -227,11 +227,30 @@ describe("toggleMute", () => {
     expect(result).toEqual(expect.objectContaining({ ok: true, before: false, after: true }));
   });
 
+  test("times out the mic after its own timeout", async () => {
+    document.body.innerHTML = '<button data-is-muted="false"></button>';
+    let settled = false;
+
+    const pending = script.toggleMute().then((result) => {
+      settled = true;
+      return result;
+    });
+    jest.advanceTimersByTime(script.MIC_STATE_CHANGE_TIMEOUT_MS - 1);
+    await Promise.resolve();
+    const settledBeforeTimeout = settled;
+    jest.advanceTimersByTime(1);
+    const result = await pending;
+
+    expect(settledBeforeTimeout).toBe(false);
+    expect(script.MIC_STATE_CHANGE_TIMEOUT_MS).toBe(1200);
+    expect(result).toEqual(expect.objectContaining({ ok: false, reason: "timeout" }));
+  });
+
   test("resolves timeout with the unchanged state when the DOM never flips", async () => {
     document.body.innerHTML = '<button data-is-muted="false"></button>';
 
     const pending = script.toggleMute();
-    jest.advanceTimersByTime(script.STATE_CHANGE_TIMEOUT_MS);
+    jest.advanceTimersByTime(script.MIC_STATE_CHANGE_TIMEOUT_MS);
     const result = await pending;
 
     expect(result).toEqual(
@@ -244,7 +263,7 @@ describe("toggleMute", () => {
     document.body.innerHTML = '<button data-is-muted="false"></button>';
 
     const pending = script.toggleMute();
-    jest.advanceTimersByTime(script.STATE_CHANGE_TIMEOUT_MS);
+    jest.advanceTimersByTime(script.MIC_STATE_CHANGE_TIMEOUT_MS);
     await pending;
 
     expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
@@ -275,7 +294,7 @@ describe("toggleMute", () => {
 
     expect(second).toEqual(expect.objectContaining({ ok: false, reason: "busy" }));
     expect(clickSpy).toHaveBeenCalledTimes(1);
-    jest.advanceTimersByTime(script.STATE_CHANGE_TIMEOUT_MS);
+    jest.advanceTimersByTime(script.MIC_STATE_CHANGE_TIMEOUT_MS);
     await first;
   });
 
@@ -284,10 +303,10 @@ describe("toggleMute", () => {
     const clickSpy = jest.spyOn(document.querySelector("button"), "click");
 
     const first = script.toggleMute();
-    jest.advanceTimersByTime(script.STATE_CHANGE_TIMEOUT_MS);
+    jest.advanceTimersByTime(script.MIC_STATE_CHANGE_TIMEOUT_MS);
     await first;
     const second = script.toggleMute();
-    jest.advanceTimersByTime(script.STATE_CHANGE_TIMEOUT_MS);
+    jest.advanceTimersByTime(script.MIC_STATE_CHANGE_TIMEOUT_MS);
     const result = await second;
 
     expect(result.reason).toBe("timeout");
@@ -304,7 +323,7 @@ describe("toggleMute", () => {
     const camera = await script.toggleCamera();
 
     expect(camera.ok).toBe(true);
-    jest.advanceTimersByTime(script.STATE_CHANGE_TIMEOUT_MS);
+    jest.advanceTimersByTime(script.MIC_STATE_CHANGE_TIMEOUT_MS);
     await mic;
   });
 
@@ -318,7 +337,7 @@ describe("toggleMute", () => {
       });
 
       const pending = script.toggleMute();
-      jest.advanceTimersByTime(script.STATE_CHANGE_TIMEOUT_MS);
+      jest.advanceTimersByTime(script.MIC_STATE_CHANGE_TIMEOUT_MS);
       const result = await pending;
 
       expect(result).toEqual(expect.objectContaining({ ok: true, before: false, after: true }));
@@ -348,7 +367,7 @@ describe("toggleMute", () => {
       document.body.innerHTML = '<button data-is-muted="false"></button>';
 
       const pending = script.toggleMute();
-      jest.advanceTimersByTime(script.STATE_CHANGE_TIMEOUT_MS);
+      jest.advanceTimersByTime(script.MIC_STATE_CHANGE_TIMEOUT_MS);
       await pending;
 
       expect(observerStub.instances[0].disconnect).toHaveBeenCalled();
@@ -381,11 +400,11 @@ describe("toggleMute", () => {
       const querySpy = jest.spyOn(document, "querySelector").mockImplementation(() => {
         throw new Error("detached");
       });
-      jest.advanceTimersByTime(script.STATE_CHANGE_TIMEOUT_MS);
+      jest.advanceTimersByTime(script.MIC_STATE_CHANGE_TIMEOUT_MS);
       const result = await pending;
       querySpy.mockRestore();
       const next = script.toggleMute();
-      jest.advanceTimersByTime(script.STATE_CHANGE_TIMEOUT_MS);
+      jest.advanceTimersByTime(script.MIC_STATE_CHANGE_TIMEOUT_MS);
 
       expect(result).toEqual(expect.objectContaining({ ok: false, reason: "exception", error: "detached" }));
       expect((await next).reason).toBe("timeout");
@@ -682,11 +701,41 @@ describe("toggleCamera", () => {
     expect(result).toEqual(expect.objectContaining({ ok: true, before: true, after: false }));
   });
 
+  test("keeps waiting for the camera past the mic timeout, while the camera warms up", async () => {
+    document.body.innerHTML = '<button aria-label="Turn off camera"></button>';
+    const btn = document.querySelector("button");
+    btn.addEventListener("click", () => setTimeout(() => btn.setAttribute("aria-label", "Turn on camera"), 1230));
+
+    const pending = script.toggleCamera();
+    jest.advanceTimersByTime(1230);
+    const result = await pending;
+
+    expect(result).toEqual(expect.objectContaining({ ok: true, before: true, after: false }));
+  });
+
+  test("times out the camera only after its own timeout", async () => {
+    document.body.innerHTML = '<button aria-label="Turn off camera"></button>';
+    let settled = false;
+
+    const pending = script.toggleCamera().then((result) => {
+      settled = true;
+      return result;
+    });
+    jest.advanceTimersByTime(script.CAMERA_STATE_CHANGE_TIMEOUT_MS - 1);
+    await Promise.resolve();
+    const settledBeforeTimeout = settled;
+    jest.advanceTimersByTime(1);
+    const result = await pending;
+
+    expect(settledBeforeTimeout).toBe(false);
+    expect(result).toEqual(expect.objectContaining({ ok: false, reason: "timeout" }));
+  });
+
   test("resolves timeout when the camera state never flips", async () => {
     document.body.innerHTML = '<button aria-label="Turn off camera"></button>';
 
     const pending = script.toggleCamera();
-    jest.advanceTimersByTime(script.STATE_CHANGE_TIMEOUT_MS);
+    jest.advanceTimersByTime(script.CAMERA_STATE_CHANGE_TIMEOUT_MS);
     const result = await pending;
 
     expect(result).toEqual(
@@ -859,7 +908,7 @@ describe("media session signal", () => {
     meetReportsAfterClick(document.querySelector("button"), { type: MEDIA_SESSION, kind: "mic", active: true });
 
     const pending = script.toggleMute();
-    jest.advanceTimersByTime(script.STATE_CHANGE_TIMEOUT_MS);
+    jest.advanceTimersByTime(script.MIC_STATE_CHANGE_TIMEOUT_MS);
     const result = await pending;
 
     expect(result).toEqual(expect.objectContaining({ ok: false, reason: "timeout" }));
@@ -870,7 +919,7 @@ describe("media session signal", () => {
     meetReportsAfterClick(document.querySelector("button"), { type: MEDIA_SESSION, kind: "camera", active: false });
 
     const pending = script.toggleMute();
-    jest.advanceTimersByTime(script.STATE_CHANGE_TIMEOUT_MS);
+    jest.advanceTimersByTime(script.MIC_STATE_CHANGE_TIMEOUT_MS);
     const result = await pending;
 
     expect(result).toEqual(expect.objectContaining({ ok: false, reason: "timeout" }));
@@ -890,7 +939,7 @@ describe("media session signal", () => {
     );
 
     const pending = script.toggleMute();
-    jest.advanceTimersByTime(script.STATE_CHANGE_TIMEOUT_MS);
+    jest.advanceTimersByTime(script.MIC_STATE_CHANGE_TIMEOUT_MS);
     const result = await pending;
 
     expect(result).toEqual(expect.objectContaining({ ok: false, reason: "timeout" }));
