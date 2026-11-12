@@ -78,7 +78,7 @@ class MuteStateManager: ObservableObject {
             self?.handleMessage(message)
         }
         socketServer.onClientConnected = { [weak self] in
-            NSLog("MacMute: Helper connected, requesting state")
+            self?.logger.notice("Helper connected, requesting mic and camera state")
             self?.requestState()
             self?.requestCameraState()
         }

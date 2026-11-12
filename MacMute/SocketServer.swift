@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 enum SocketSendError: String, Error {
     case noSocketClient = "no_socket_client"
@@ -13,6 +14,7 @@ class SocketServer {
     private var listenSource: DispatchSourceRead?
     private var readSource: DispatchSourceRead?
     private let queue = DispatchQueue(label: "com.macmute.socket", qos: .userInteractive)
+    private let logger = Logger(subsystem: "com.macmute.app", category: "socket")
 
     var onMessageReceived: (([String: Any]) -> Void)?
     var onClientConnected: (() -> Void)?
@@ -60,7 +62,7 @@ class SocketServer {
 
     private func write(_ message: [String: Any]) -> Result<Void, SocketSendError> {
         guard clientSocket >= 0 else {
-            NSLog("MacMute: No client connected, cannot send message")
+            logger.error("No helper connected, cannot send \(String(describing: message), privacy: .public)")
             return .failure(.noSocketClient)
         }
 
@@ -68,7 +70,7 @@ class SocketServer {
         do {
             data = try JSONSerialization.data(withJSONObject: message)
         } catch {
-            NSLog("MacMute: Failed to serialize message \(message): \(error)")
+            logger.error("Failed to serialize message \(String(describing: message), privacy: .public): \(error.localizedDescription, privacy: .public)")
             return .failure(.serializationFailed)
         }
         var messageData = data
@@ -90,10 +92,10 @@ class SocketServer {
         }
         guard written == total else {
             let cause = writeErrno.map { String(cString: strerror($0)) } ?? "no buffer"
-            NSLog("MacMute: Failed to write to socket (\(written)/\(total) bytes): \(cause)")
+            logger.error("Failed to write to helper (\(written, privacy: .public)/\(total, privacy: .public) bytes): \(cause, privacy: .public)")
             return .failure(.writeFailed)
         }
-        NSLog("MacMute: Sent message to helper: \(message)")
+        logger.info("Sent to helper: \(String(describing: message), privacy: .public)")
         return .success(())
     }
 
@@ -103,7 +105,7 @@ class SocketServer {
 
         serverSocket = socket(AF_UNIX, SOCK_STREAM, 0)
         guard serverSocket >= 0 else {
-            NSLog("MacMute: Failed to create socket: \(String(cString: strerror(errno)))")
+            logger.error("Failed to create socket: \(String(cString: strerror(errno)), privacy: .public)")
             return
         }
 
@@ -123,18 +125,18 @@ class SocketServer {
         }
 
         guard bindResult == 0 else {
-            NSLog("MacMute: Failed to bind socket: \(String(cString: strerror(errno)))")
+            logger.error("Failed to bind socket at \(self.socketPath, privacy: .public): \(String(cString: strerror(errno)), privacy: .public)")
             close(serverSocket)
             return
         }
 
         guard listen(serverSocket, 1) == 0 else {
-            NSLog("MacMute: Failed to listen on socket: \(String(cString: strerror(errno)))")
+            logger.error("Failed to listen on socket: \(String(cString: strerror(errno)), privacy: .public)")
             close(serverSocket)
             return
         }
 
-        NSLog("MacMute: Socket server listening at \(socketPath)")
+        logger.notice("Socket server listening at \(self.socketPath, privacy: .public)")
 
         let listeningSocket = serverSocket
         let source = DispatchSource.makeReadSource(fileDescriptor: listeningSocket, queue: queue)
@@ -151,23 +153,23 @@ class SocketServer {
     private func acceptConnection() {
         let client = accept(serverSocket, nil, nil)
         guard client >= 0 else {
-            NSLog("MacMute: Failed to accept connection: \(String(cString: strerror(errno)))")
+            logger.error("Failed to accept connection: \(String(cString: strerror(errno)), privacy: .public)")
             return
         }
 
         if clientSocket >= 0 {
-            NSLog("MacMute: Replacing the connected helper with a new one")
+            logger.notice("Replacing the connected helper with a new one")
             readSource?.cancel()
         }
 
         // Without this, writing to a helper that just died raises SIGPIPE and kills the app.
         var noSigPipe: Int32 = 1
         if setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size)) != 0 {
-            NSLog("MacMute: Failed to set SO_NOSIGPIPE: \(String(cString: strerror(errno)))")
+            logger.error("Failed to set SO_NOSIGPIPE: \(String(cString: strerror(errno)), privacy: .public)")
         }
 
         clientSocket = client
-        NSLog("MacMute: Helper connected")
+        logger.notice("Helper connected")
 
         startReading()
 
@@ -188,7 +190,7 @@ class SocketServer {
 
             if bytesRead <= 0 {
                 let cause = bytesRead < 0 ? String(cString: strerror(errno)) : "end of stream"
-                NSLog("MacMute: Helper disconnected (\(cause))")
+                self.logger.notice("Helper disconnected (\(cause, privacy: .public))")
                 source.cancel()
                 if self.clientSocket == client {
                     self.clientSocket = -1
@@ -205,7 +207,7 @@ class SocketServer {
                 buffer = Data(buffer[buffer.index(after: newlineIndex)...])
 
                 guard let json = try? JSONSerialization.jsonObject(with: messageData) as? [String: Any] else {
-                    NSLog("MacMute: Dropping undecodable message from helper: \(String(decoding: messageData, as: UTF8.self))")
+                    self.logger.error("Dropping undecodable message from helper: \(String(decoding: messageData, as: UTF8.self), privacy: .public)")
                     continue
                 }
                 DispatchQueue.main.async {
