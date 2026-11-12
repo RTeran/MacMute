@@ -102,9 +102,29 @@ final class ToggleConfirmationTests: XCTestCase {
         XCTAssertEqual(harness.confirmationTimer(1).delay, 4)
     }
 
-    func testTheAppWaitsLongerForTheCameraThanForTheMic() {
-        XCTAssertEqual(ConfirmationTimeouts.standard.mic, 3.0)
-        XCTAssertEqual(ConfirmationTimeouts.standard.camera, 4.0)
+    // Mirrors MIC_STATE_CHANGE_TIMEOUT_MS and CAMERA_STATE_CHANGE_TIMEOUT_MS in content-script.js.
+    private let contentScriptMicWait: TimeInterval = 1.2
+    private let contentScriptCameraWait: TimeInterval = 2.5
+    // Hidden-tab timer alignment (~1 s) plus the background's 200 ms reinjection delay.
+    private let hiddenTabOverhead: TimeInterval = 1.2
+
+    func testTheMicTimeoutOutlastsTheContentScriptWaitInAHiddenTab() {
+        XCTAssertGreaterThan(ConfirmationTimeouts.standard.mic, contentScriptMicWait + hiddenTabOverhead)
+    }
+
+    func testTheCameraTimeoutOutlastsTheContentScriptWaitInAHiddenTab() {
+        XCTAssertGreaterThan(ConfirmationTimeouts.standard.camera, contentScriptCameraWait + hiddenTabOverhead)
+    }
+
+    func testALateToggleResultForARequestAPassiveUpdateConfirmedChangesNothing() {
+        harness.confirmation.toggle(.mic)
+        harness.confirmation.handlePassiveUpdate(.mic, newState: true)
+
+        harness.confirm(.mic, "r1", newState: true)
+        harness.confirmationTimer().fire()
+
+        XCTAssertTrue(harness.feedbackStarts.isEmpty)
+        XCTAssertNil(harness.confirmation.pendingToggles.pending[.mic])
     }
 
     func testSuccessWithMatchingRequestIdConfirmsWithoutFeedback() {
@@ -334,6 +354,13 @@ final class ToggleResultParsingTests: XCTestCase {
         let result = ToggleResult(message: ["type": "toggle_result", "target": "mic", "ok": true, "muted": false, "source": "media_session"])
 
         XCTAssertEqual(result?.source, "media_session")
+    }
+
+    func testIgnoresASourceThatIsNotAString() {
+        let result = ToggleResult(message: ["type": "toggle_result", "target": "mic", "ok": true, "muted": false, "source": 42])
+
+        XCTAssertNotNil(result)
+        XCTAssertNil(result?.source)
     }
 
     func testParsesAConfirmedCameraResultFromOff() {

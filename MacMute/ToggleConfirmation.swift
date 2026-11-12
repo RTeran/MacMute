@@ -92,8 +92,9 @@ enum ToggleSendOutcome: Equatable {
 /// How long the app waits for a toggle_result before showing the unconfirmed feedback.
 struct ConfirmationTimeouts: Equatable {
     // Each budget must outlast the content script's wait for that target (1200 ms mic, 2500 ms
-    // camera), rounded up by hidden-tab timer alignment (~1 s), plus the 200 ms reinjection delay.
-    static let standard = ConfirmationTimeouts(mic: 3.0, camera: 4.0)
+    // camera), rounded up by hidden-tab timer alignment (~1 s), plus the 200 ms reinjection delay
+    // and the IPC round trip through the helper.
+    static let standard = ConfirmationTimeouts(mic: 3.0, camera: 4.5)
 
     let mic: TimeInterval
     let camera: TimeInterval
@@ -199,6 +200,8 @@ final class ToggleConfirmation {
                 } else {
                     unconfirm(target, toggle, reason: "unexpected_state", source: result.source)
                 }
+            } else {
+                logger.notice("toggle_result for already resolved \(target.rawValue, privacy: .public) request \(requestId, privacy: .public), source \(result.source ?? "unknown", privacy: .public)")
             }
             // A late success after the timeout still carries the real state.
             endUnconfirmedFeedback(for: target, reached: newState)
