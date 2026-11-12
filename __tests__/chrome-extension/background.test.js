@@ -230,6 +230,43 @@ describe("content script injection", () => {
     expect(postedToggleResults()[0]).toEqual(expect.objectContaining({ ok: true, muted: true }));
   });
 
+  test("also injects the Media Session bridge into the page's main world", async () => {
+    jest.useFakeTimers();
+    givenMeetTabs([{ id: 1 }]);
+    chrome.tabs.sendMessage
+      .mockRejectedValueOnce(new Error("Receiving end does not exist."))
+      .mockResolvedValueOnce({ ok: true, before: false, after: true });
+
+    const handled = background.handleNativeMessage({ type: "toggle" });
+    await jest.advanceTimersByTimeAsync(200);
+    await handled;
+
+    expect(chrome.scripting.executeScript).toHaveBeenCalledWith({
+      target: { tabId: 1 },
+      files: ["media-session-bridge.js"],
+      world: "MAIN",
+    });
+  });
+
+  test("still confirms through the DOM when the Media Session bridge cannot be injected", async () => {
+    jest.useFakeTimers();
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    givenMeetTabs([{ id: 1 }]);
+    chrome.tabs.sendMessage
+      .mockRejectedValueOnce(new Error("Receiving end does not exist."))
+      .mockResolvedValueOnce({ ok: true, before: false, after: true, source: "dom" });
+    chrome.scripting.executeScript.mockImplementation(({ world }) =>
+      world === "MAIN" ? Promise.reject(new Error("no main world")) : Promise.resolve([])
+    );
+
+    const handled = background.handleNativeMessage({ type: "toggle" });
+    await jest.advanceTimersByTimeAsync(200);
+    await handled;
+
+    expect(postedToggleResults()[0]).toEqual(expect.objectContaining({ ok: true, source: "dom" }));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Media Session bridge"), expect.any(String));
+  });
+
   test("does not retry on other errors, so a toggle is never clicked twice", async () => {
     givenMeetTabs([{ id: 1 }]);
     givenTabResponses({
@@ -248,7 +285,9 @@ describe("content script injection", () => {
   test("reports injection_failed when the content script cannot be injected", async () => {
     givenMeetTabs([{ id: 1 }]);
     chrome.tabs.sendMessage.mockRejectedValueOnce(new Error("Receiving end does not exist."));
-    chrome.scripting.executeScript.mockRejectedValueOnce(new Error("Cannot access contents"));
+    chrome.scripting.executeScript.mockImplementation(({ files }) =>
+      files.includes("content-script.js") ? Promise.reject(new Error("Cannot access contents")) : Promise.resolve([])
+    );
 
     await background.handleNativeMessage({ type: "toggle" });
 

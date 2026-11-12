@@ -80,6 +80,16 @@ async function sendToTab(tabId, message) {
     try {
       await chrome.scripting.executeScript({
         target: { tabId },
+        files: ["media-session-bridge.js"],
+        world: "MAIN",
+      });
+    } catch (bridgeError) {
+      // Without the bridge the content script still confirms through the DOM while Meet renders.
+      console.warn("MacMute: could not inject the Media Session bridge", bridgeError.message);
+    }
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
         files: ["content-script.js"],
       });
     } catch (injectionError) {
