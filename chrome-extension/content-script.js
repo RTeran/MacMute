@@ -124,6 +124,21 @@
   // Same message type as media-session-bridge.js, which runs in the page's MAIN world.
   const MEDIA_SESSION_MESSAGE_TYPE = "macmute:media-session";
   const mediaSessionWaiters = { mic: null, camera: null };
+  // After a timeout the app shows "unconfirmed"; a passive update reaching the expected state
+  // still confirms it there, so a late Media Session change is reported once within this window.
+  const LATE_MEDIA_SESSION_WINDOW_MS = 5000;
+  const lateMediaSessionWaiters = { mic: null, camera: null };
+
+  function stopLateWait(target) {
+    clearTimeout(lateMediaSessionWaiters[target]?.timer);
+    lateMediaSessionWaiters[target] = null;
+  }
+
+  function waitForLateMediaSession(target, before) {
+    stopLateWait(target);
+    const timer = setTimeout(() => stopLateWait(target), LATE_MEDIA_SESSION_WINDOW_MS);
+    lateMediaSessionWaiters[target] = { before, timer };
+  }
 
   // The DOM freezes while Chrome does not render Meet (window on another Space), but Meet still
   // reports through the Media Session. This keeps the latest state from either source, so a
@@ -170,6 +185,7 @@
         return;
       }
       togglesInProgress.add(target);
+      stopLateWait(target);
 
       const failWith = (error) =>
         finish({ ok: false, reason: "exception", error: error?.message, before: null, after: null });
@@ -214,7 +230,9 @@
         timer = setTimeout(
           guarded(() => {
             checkFlip();
+            if (settled) return;
             finish({ ok: false, reason: "timeout", before: domBefore, after: readState() });
+            waitForLateMediaSession(target, before);
           }),
           timeoutMs
         );
@@ -264,7 +282,7 @@
         return true;
 
       case "get_state":
-        const state = getMuteState();
+        const state = queriedState("mic", getMuteState);
         if (state !== null) {
           currentMuteState = state;
           sendStateUpdate(state);
@@ -276,7 +294,7 @@
         return true;
 
       case "get_camera_state":
-        const cameraState = getCameraState();
+        const cameraState = queriedState("camera", getCameraState);
         if (cameraState !== null) {
           currentCameraState = cameraState;
           sendCameraStateUpdate(cameraState);
@@ -302,7 +320,8 @@
 
   // Meet's own page can forge this message; that is acceptable, so only its shape is checked.
   // Meet also calls the Media Session outside our toggles (lobby, leaving, device loss), so a
-  // signal only confirms a pending toggle and is never reported to the app on its own.
+  // signal only confirms a pending toggle, or one that just timed out, and is never reported to
+  // the app on its own.
   window.addEventListener("message", (event) => {
     if (!isMediaSessionMessage(event)) return;
     const { kind, active } = event.data;
@@ -313,13 +332,36 @@
     mediaSessionSinceVisible[kind] = state;
 
     const waiter = mediaSessionWaiters[kind];
-    if (!waiter) return;
+    const lateWaiter = lateMediaSessionWaiters[kind];
+    if (!waiter && !lateWaiter) return;
     if (!findButtonFor[kind]()) {
       console.debug(`MacMute: ignoring media session ${kind} signal, no ${kind} button`);
       return;
     }
-    waiter(state);
+    if (waiter) {
+      waiter(state);
+    } else if (state !== lateWaiter.before) {
+      stopLateWait(kind);
+      console.debug(`MacMute: late media session ${kind} change after timeout, reporting ${state}`);
+      reportState(kind, state);
+    }
   });
+
+  function queriedState(target, readState) {
+    const mediaSessionState = mediaSessionSinceVisible[target];
+    if (document.visibilityState === "hidden" && mediaSessionState !== undefined) return mediaSessionState;
+    return readState();
+  }
+
+  function reportState(target, state) {
+    if (target === "mic") {
+      currentMuteState = state;
+      sendStateUpdate(state);
+    } else {
+      currentCameraState = state;
+      sendCameraStateUpdate(state);
+    }
+  }
 
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;
@@ -393,6 +435,7 @@
       sendCameraStateUpdate,
       CAMERA_BUTTON_SELECTORS,
       MIC_STATE_CHANGE_TIMEOUT_MS,
+      LATE_MEDIA_SESSION_WINDOW_MS,
       CAMERA_STATE_CHANGE_TIMEOUT_MS,
       _getObserver: () => observer,
       _getState: () => ({ currentMuteState, currentCameraState }),
@@ -404,6 +447,8 @@
           knownState.camera = null;
           mediaSessionSinceVisible.mic = undefined;
           mediaSessionSinceVisible.camera = undefined;
+          stopLateWait("mic");
+          stopLateWait("camera");
           return;
         }
         currentMuteState = s.currentMuteState ?? currentMuteState;

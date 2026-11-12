@@ -1095,3 +1095,141 @@ describe("DOM updates while the page is hidden", () => {
   });
 
 });
+
+describe("media session signal after a toggle timed out", () => {
+  const MEDIA_SESSION = "macmute:media-session";
+  const micSignal = (active) => ({ type: MEDIA_SESSION, kind: "mic", active });
+
+  function postMediaSession(data) {
+    window.dispatchEvent(new MessageEvent("message", { data, source: window }));
+  }
+
+  async function timedOutMute() {
+    script._setState({ currentMuteState: false });
+    document.body.innerHTML = '<button data-is-muted="false"></button>';
+    await Promise.resolve();
+    const pending = script.toggleMute();
+    jest.advanceTimersByTime(script.MIC_STATE_CHANGE_TIMEOUT_MS);
+    const result = await pending;
+    chrome.runtime.sendMessage.mockClear();
+    return result;
+  }
+
+  const stateUpdates = () =>
+    chrome.runtime.sendMessage.mock.calls.filter(([message]) => message.type === "state_update");
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.runOnlyPendingTimers();
+    jest.useRealTimers();
+  });
+
+  test("reports a late change once as a passive update", async () => {
+    expect((await timedOutMute()).reason).toBe("timeout");
+
+    postMediaSession(micSignal(false));
+    postMediaSession(micSignal(true));
+    postMediaSession(micSignal(false));
+
+    expect(stateUpdates()).toEqual([[{ type: "state_update", muted: true }]]);
+  });
+
+  test("ignores a late signal that repeats the state before the toggle", async () => {
+    await timedOutMute();
+
+    postMediaSession(micSignal(true));
+
+    expect(stateUpdates()).toEqual([]);
+  });
+
+  test("ignores a signal that arrives after the late window", async () => {
+    await timedOutMute();
+
+    jest.advanceTimersByTime(script.LATE_MEDIA_SESSION_WINDOW_MS);
+    postMediaSession(micSignal(false));
+
+    expect(stateUpdates()).toEqual([]);
+  });
+
+  test("ignores a late signal when the mic button is gone", async () => {
+    await timedOutMute();
+
+    document.body.innerHTML = "";
+    postMediaSession(micSignal(false));
+
+    expect(stateUpdates()).toEqual([]);
+  });
+
+  test("stops waiting for a late signal when the next toggle starts", async () => {
+    await timedOutMute();
+    const btn = document.querySelector("[data-is-muted]");
+    btn.addEventListener("click", () => btn.setAttribute("data-is-muted", "true"));
+    expect((await script.toggleMute()).source).toBe("dom");
+    await Promise.resolve();
+    chrome.runtime.sendMessage.mockClear();
+
+    postMediaSession(micSignal(false));
+
+    expect(stateUpdates()).toEqual([]);
+  });
+});
+
+describe("state queries while the page is hidden", () => {
+  const MEDIA_SESSION = "macmute:media-session";
+
+  function setVisibility(state) {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+    document.dispatchEvent(new Event("visibilitychange"));
+  }
+
+  function postMediaSession(data) {
+    window.dispatchEvent(new MessageEvent("message", { data, source: window }));
+  }
+
+  afterEach(() => {
+    setVisibility("visible");
+  });
+
+  test("answers get_state with the media session state instead of the frozen DOM", () => {
+    document.body.innerHTML = '<button data-is-muted="false"></button>';
+    setVisibility("hidden");
+    postMediaSession({ type: MEDIA_SESSION, kind: "mic", active: false });
+
+    messageListener({ type: "get_state" }, {}, jest.fn());
+
+    expect(chrome.runtime.sendMessage).toHaveBeenLastCalledWith({ type: "state_update", muted: true });
+  });
+
+  test("answers get_camera_state with the media session state instead of the frozen DOM", () => {
+    document.body.innerHTML = '<button aria-label="Turn off camera"></button>';
+    setVisibility("hidden");
+    postMediaSession({ type: MEDIA_SESSION, kind: "camera", active: false });
+
+    messageListener({ type: "get_camera_state" }, {}, jest.fn());
+
+    expect(chrome.runtime.sendMessage).toHaveBeenLastCalledWith({ type: "camera_state_update", active: false });
+  });
+
+  test("answers get_state from the DOM while the page is visible", () => {
+    document.body.innerHTML = '<button data-is-muted="false"></button>';
+    postMediaSession({ type: MEDIA_SESSION, kind: "mic", active: false });
+
+    messageListener({ type: "get_state" }, {}, jest.fn());
+
+    expect(chrome.runtime.sendMessage).toHaveBeenLastCalledWith({ type: "state_update", muted: false });
+  });
+
+  test("answers get_state from the DOM once the page is visible again", () => {
+    document.body.innerHTML = '<button data-is-muted="false"></button>';
+    setVisibility("hidden");
+    postMediaSession({ type: MEDIA_SESSION, kind: "mic", active: false });
+    setVisibility("visible");
+
+    messageListener({ type: "get_state" }, {}, jest.fn());
+
+    expect(chrome.runtime.sendMessage).toHaveBeenLastCalledWith({ type: "state_update", muted: false });
+  });
+});
