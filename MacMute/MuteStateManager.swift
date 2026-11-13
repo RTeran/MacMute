@@ -1,10 +1,13 @@
 import Foundation
 import Combine
 import SwiftUI
+import os
 
 extension Notification.Name {
     static let muteStateDidChange = Notification.Name("muteStateDidChange")
     static let cameraStateDidChange = Notification.Name("cameraStateDidChange")
+    static let unconfirmedToggleFeedbackDidStart = Notification.Name("unconfirmedToggleFeedbackDidStart")
+    static let unconfirmedToggleFeedbackDidEnd = Notification.Name("unconfirmedToggleFeedbackDidEnd")
 }
 
 class MuteStateManager: ObservableObject {
@@ -26,9 +29,39 @@ class MuteStateManager: ObservableObject {
         }
     }
 
+    private static let unconfirmedColor = NSColor.systemOrange.withAlphaComponent(0.85)
+
     private let socketServer = SocketServer()
     private let overlayManager = MenuBarOverlayManager()
     private let shortcutManager = GlobalShortcutManager.shared
+    private let logger = Logger(subsystem: "com.macmute.app", category: "toggle")
+    private lazy var toggleConfirmation: ToggleConfirmation = {
+        let confirmation = ToggleConfirmation(
+            confirmationTimeouts: .standard,
+            feedbackDuration: UnconfirmedFeedback.duration,
+            confirmedState: { [unowned self] target in
+                target == .mic ? self.isMuted : self.isCameraOff
+            },
+            send: { [weak self] target, requestId, completion in
+                guard let self = self else { return completion(.failed(reason: "app_shutting_down")) }
+                self.socketServer.sendMessage(["type": target.commandType, "requestId": requestId]) { result in
+                    switch result {
+                    case .success: completion(.sent)
+                    case let .failure(error): completion(.failed(reason: error.rawValue))
+                    }
+                }
+            }
+        )
+        confirmation.onUnconfirmedFeedbackStart = { [weak self] _ in
+            self?.overlayManager.showUnconfirmed(color: Self.unconfirmedColor)
+            NotificationCenter.default.post(name: .unconfirmedToggleFeedbackDidStart, object: nil)
+        }
+        confirmation.onUnconfirmedFeedbackEnd = { [weak self] in
+            self?.overlayManager.hideUnconfirmed()
+            NotificationCenter.default.post(name: .unconfirmedToggleFeedbackDidEnd, object: nil)
+        }
+        return confirmation
+    }()
 
     private init() {
         micMutedColor = loadColor(forKey: "micMutedColorData", default: .red)
@@ -41,7 +74,7 @@ class MuteStateManager: ObservableObject {
             self?.handleMessage(message)
         }
         socketServer.onClientConnected = { [weak self] in
-            NSLog("MacMute: Helper connected, requesting state")
+            self?.logger.notice("Helper connected, requesting mic and camera state")
             self?.requestState()
             self?.requestCameraState()
         }
@@ -64,15 +97,11 @@ class MuteStateManager: ObservableObject {
     }
 
     func toggleMute() {
-        // Only send the command — state updates when the extension confirms
-        socketServer.sendMessage(["type": "toggle"])
-        NSLog("MacMute: Toggle mic sent to extension, waiting for confirmation")
+        toggleConfirmation.toggle(.mic)
     }
 
     func toggleCamera() {
-        // Only send the command — state updates when the extension confirms
-        socketServer.sendMessage(["type": "toggle_camera"])
-        NSLog("MacMute: Toggle camera sent to extension, waiting for confirmation")
+        toggleConfirmation.toggle(.camera)
     }
 
     func requestState() {
@@ -84,19 +113,44 @@ class MuteStateManager: ObservableObject {
     }
 
     private func handleMessage(_ message: [String: Any]) {
-        guard let type = message["type"] as? String else { return }
+        guard let type = message["type"] as? String else {
+            logger.error("Message without type: \(String(describing: message), privacy: .public)")
+            return
+        }
 
         switch type {
         case "state_update":
             if let muted = message["muted"] as? Bool {
+                toggleConfirmation.handlePassiveUpdate(.mic, newState: muted)
                 updateMicState(muted: muted)
             }
         case "camera_state_update":
             if let active = message["active"] as? Bool {
+                toggleConfirmation.handlePassiveUpdate(.camera, newState: !active)
                 updateCameraState(active: active)
             }
+        case "toggle_result":
+            handleToggleResult(message)
         default:
-            NSLog("MacMute: Unknown message type: \(type)")
+            logger.error("Unknown message type: \(type, privacy: .public)")
+        }
+    }
+
+    private func handleToggleResult(_ message: [String: Any]) {
+        guard let result = ToggleResult(message: message) else {
+            logger.error("Malformed toggle_result: \(String(describing: message), privacy: .public)")
+            return
+        }
+        if result.outcome == .failed(reason: "missing_state") {
+            logger.error("toggle_result ok without state: \(String(describing: message), privacy: .public)")
+        }
+
+        toggleConfirmation.handle(result)
+
+        guard case let .confirmed(newState) = result.outcome else { return }
+        switch result.target {
+        case .mic: updateMicState(muted: newState)
+        case .camera: updateCameraState(active: !newState)
         }
     }
 

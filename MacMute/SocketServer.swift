@@ -1,4 +1,11 @@
 import Foundation
+import os
+
+enum SocketSendError: String, Error {
+    case noSocketClient = "no_socket_client"
+    case serializationFailed = "serialization_failed"
+    case writeFailed = "write_failed"
+}
 
 class SocketServer {
     private let socketPath: String
@@ -7,16 +14,24 @@ class SocketServer {
     private var listenSource: DispatchSourceRead?
     private var readSource: DispatchSourceRead?
     private let queue = DispatchQueue(label: "com.macmute.socket", qos: .userInteractive)
+    private let logger = Logger(subsystem: "com.macmute.app", category: "socket")
 
     var onMessageReceived: (([String: Any]) -> Void)?
     var onClientConnected: (() -> Void)?
 
-    init() {
+    convenience init() {
         let appSupport = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/MacMute")
         try? FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
-        self.socketPath = appSupport.appendingPathComponent("macmute.sock").path
+        self.init(socketPath: appSupport.appendingPathComponent("macmute.sock").path)
     }
+
+    init(socketPath: String) {
+        self.socketPath = socketPath
+    }
+
+    // The full path contains the user name.
+    private var socketName: String { (socketPath as NSString).lastPathComponent }
 
     func start() {
         queue.async { [weak self] in
@@ -24,39 +39,68 @@ class SocketServer {
         }
     }
 
+    // Each fd is closed by its own source's cancel handler: closing it here first makes libdispatch
+    // report a vanished resource, and the fd number could be reused before the handler runs.
     func stop() {
-        listenSource?.cancel()
-        readSource?.cancel()
-        if clientSocket >= 0 { close(clientSocket) }
-        if serverSocket >= 0 { close(serverSocket) }
+        dispatchPrecondition(condition: .notOnQueue(queue))
+        queue.sync {
+            listenSource?.cancel()
+            listenSource = nil
+            readSource?.cancel()
+            readSource = nil
+            serverSocket = -1
+            clientSocket = -1
+        }
         unlink(socketPath)
     }
 
-    func sendMessage(_ message: [String: Any]) {
+    /// `completion` runs on the main queue.
+    func sendMessage(_ message: [String: Any], completion: ((Result<Void, SocketSendError>) -> Void)? = nil) {
         queue.async { [weak self] in
-            guard let self = self, self.clientSocket >= 0 else {
-                NSLog("MacMute: No client connected, cannot send message")
-                return
-            }
-
-            do {
-                let data = try JSONSerialization.data(withJSONObject: message)
-                var messageData = data
-                messageData.append(0x0A) // newline delimiter
-
-                messageData.withUnsafeBytes { rawBuffer in
-                    guard let ptr = rawBuffer.baseAddress else { return }
-                    let written = Darwin.write(self.clientSocket, ptr, messageData.count)
-                    if written < 0 {
-                        NSLog("MacMute: Failed to write to socket: \(String(cString: strerror(errno)))")
-                    } else {
-                        NSLog("MacMute: Sent message to helper: \(message)")
-                    }
-                }
-            } catch {
-                NSLog("MacMute: Failed to serialize message: \(error)")
+            let result = self?.write(message) ?? .failure(.noSocketClient)
+            if let completion = completion {
+                DispatchQueue.main.async { completion(result) }
             }
         }
+    }
+
+    private func write(_ message: [String: Any]) -> Result<Void, SocketSendError> {
+        guard clientSocket >= 0 else {
+            logger.error("No helper connected, cannot send \(String(describing: message), privacy: .public)")
+            return .failure(.noSocketClient)
+        }
+
+        let data: Data
+        do {
+            data = try JSONSerialization.data(withJSONObject: message)
+        } catch {
+            logger.error("Failed to serialize message \(String(describing: message), privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return .failure(.serializationFailed)
+        }
+        var messageData = data
+        messageData.append(0x0A) // newline delimiter
+
+        let total = messageData.count
+        let (written, writeErrno) = messageData.withUnsafeBytes { rawBuffer -> (Int, Int32?) in
+            guard let base = rawBuffer.baseAddress else { return (0, nil) }
+            var offset = 0
+            while offset < total {
+                let result = Darwin.write(clientSocket, base + offset, total - offset)
+                if result < 0 {
+                    if errno == EINTR { continue }
+                    return (offset, errno)
+                }
+                offset += result
+            }
+            return (offset, nil)
+        }
+        guard written == total else {
+            let cause = writeErrno.map { String(cString: strerror($0)) } ?? "no buffer"
+            logger.error("Failed to write to helper (\(written, privacy: .public)/\(total, privacy: .public) bytes): \(cause, privacy: .public)")
+            return .failure(.writeFailed)
+        }
+        logger.info("Sent to helper: \(String(describing: message), privacy: .public)")
+        return .success(())
     }
 
     private func startServer() {
@@ -65,7 +109,7 @@ class SocketServer {
 
         serverSocket = socket(AF_UNIX, SOCK_STREAM, 0)
         guard serverSocket >= 0 else {
-            NSLog("MacMute: Failed to create socket: \(String(cString: strerror(errno)))")
+            logger.error("Failed to create socket: \(String(cString: strerror(errno)), privacy: .public)")
             return
         }
 
@@ -85,27 +129,26 @@ class SocketServer {
         }
 
         guard bindResult == 0 else {
-            NSLog("MacMute: Failed to bind socket: \(String(cString: strerror(errno)))")
+            logger.error("Failed to bind socket \(self.socketName, privacy: .public): \(String(cString: strerror(errno)), privacy: .public)")
             close(serverSocket)
             return
         }
 
         guard listen(serverSocket, 1) == 0 else {
-            NSLog("MacMute: Failed to listen on socket: \(String(cString: strerror(errno)))")
+            logger.error("Failed to listen on socket: \(String(cString: strerror(errno)), privacy: .public)")
             close(serverSocket)
             return
         }
 
-        NSLog("MacMute: Socket server listening at \(socketPath)")
+        logger.notice("Socket server listening on \(self.socketName, privacy: .public)")
 
-        let source = DispatchSource.makeReadSource(fileDescriptor: serverSocket, queue: queue)
+        let listeningSocket = serverSocket
+        let source = DispatchSource.makeReadSource(fileDescriptor: listeningSocket, queue: queue)
         source.setEventHandler { [weak self] in
             self?.acceptConnection()
         }
-        source.setCancelHandler { [weak self] in
-            if let fd = self?.serverSocket, fd >= 0 {
-                close(fd)
-            }
+        source.setCancelHandler {
+            close(listeningSocket)
         }
         source.resume()
         self.listenSource = source
@@ -114,18 +157,23 @@ class SocketServer {
     private func acceptConnection() {
         let client = accept(serverSocket, nil, nil)
         guard client >= 0 else {
-            NSLog("MacMute: Failed to accept connection: \(String(cString: strerror(errno)))")
+            logger.error("Failed to accept connection: \(String(cString: strerror(errno)), privacy: .public)")
             return
         }
 
-        // Close previous client if any
         if clientSocket >= 0 {
+            logger.notice("Replacing the connected helper with a new one")
             readSource?.cancel()
-            close(clientSocket)
+        }
+
+        // Without this, writing to a helper that just died raises SIGPIPE and kills the app.
+        var noSigPipe: Int32 = 1
+        if setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size)) != 0 {
+            logger.error("Failed to set SO_NOSIGPIPE: \(String(cString: strerror(errno)), privacy: .public)")
         }
 
         clientSocket = client
-        NSLog("MacMute: Helper connected")
+        logger.notice("Helper connected")
 
         startReading()
 
@@ -135,19 +183,23 @@ class SocketServer {
     }
 
     private func startReading() {
-        let source = DispatchSource.makeReadSource(fileDescriptor: clientSocket, queue: queue)
+        let client = clientSocket
+        let source = DispatchSource.makeReadSource(fileDescriptor: client, queue: queue)
         var buffer = Data()
 
-        source.setEventHandler { [weak self] in
+        source.setEventHandler { [weak self, unowned source] in
             guard let self = self else { return }
             var readBuffer = [UInt8](repeating: 0, count: 4096)
-            let bytesRead = read(self.clientSocket, &readBuffer, readBuffer.count)
+            let bytesRead = read(client, &readBuffer, readBuffer.count)
 
             if bytesRead <= 0 {
-                NSLog("MacMute: Helper disconnected")
-                self.readSource?.cancel()
-                close(self.clientSocket)
-                self.clientSocket = -1
+                let cause = bytesRead < 0 ? String(cString: strerror(errno)) : "end of stream"
+                self.logger.notice("Helper disconnected (\(cause, privacy: .public))")
+                source.cancel()
+                if self.clientSocket == client {
+                    self.clientSocket = -1
+                    self.readSource = nil
+                }
                 return
             }
 
@@ -158,19 +210,18 @@ class SocketServer {
                 let messageData = buffer[buffer.startIndex..<newlineIndex]
                 buffer = Data(buffer[buffer.index(after: newlineIndex)...])
 
-                if let json = try? JSONSerialization.jsonObject(with: messageData) as? [String: Any] {
-                    DispatchQueue.main.async {
-                        self.onMessageReceived?(json)
-                    }
+                guard let json = try? JSONSerialization.jsonObject(with: messageData) as? [String: Any] else {
+                    self.logger.error("Dropping undecodable message from helper: \(String(decoding: messageData, as: UTF8.self), privacy: .public)")
+                    continue
+                }
+                DispatchQueue.main.async {
+                    self.onMessageReceived?(json)
                 }
             }
         }
 
-        source.setCancelHandler { [weak self] in
-            if let fd = self?.clientSocket, fd >= 0 {
-                close(fd)
-                self?.clientSocket = -1
-            }
+        source.setCancelHandler {
+            close(client)
         }
 
         source.resume()

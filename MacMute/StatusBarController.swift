@@ -5,6 +5,7 @@ class StatusBarController {
     private var statusItem: NSStatusItem
     private let muteStateManager: MuteStateManager
     private var popover: NSPopover
+    private var isShowingUnconfirmedAlert = false
     private var outsideClickMonitor: Any?
     private var previousApp: NSRunningApplication?
     private var lastCloseDate: Date?
@@ -33,6 +34,18 @@ class StatusBarController {
             self,
             selector: #selector(muteStateChanged),
             name: .muteStateDidChange,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(unconfirmedFeedbackStarted),
+            name: .unconfirmedToggleFeedbackDidStart,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(unconfirmedFeedbackEnded),
+            name: .unconfirmedToggleFeedbackDidEnd,
             object: nil
         )
         NotificationCenter.default.addObserver(
@@ -130,9 +143,27 @@ class StatusBarController {
         }
     }
 
-    @objc private func muteStateChanged() {
+    @objc private func unconfirmedFeedbackStarted() {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            self.isShowingUnconfirmedAlert = true
+            self.statusItem.button?.image = NSImage(
+                systemSymbolName: "exclamationmark.triangle.fill",
+                accessibilityDescription: "Toggle not confirmed"
+            )
+        }
+    }
+
+    @objc private func unconfirmedFeedbackEnded() {
+        DispatchQueue.main.async { [weak self] in
+            self?.isShowingUnconfirmedAlert = false
+            self?.muteStateChanged()
+        }
+    }
+
+    @objc private func muteStateChanged() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, !self.isShowingUnconfirmedAlert else { return }
             let isMuted = self.muteStateManager.isMuted
             let symbolName = isMuted ? "mic.slash.fill" : "mic.fill"
             self.statusItem.button?.image = NSImage(

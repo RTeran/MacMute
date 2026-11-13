@@ -19,6 +19,16 @@
 		A1000020 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000020 /* main.swift */; };
 		A1000030 /* MacMuteHelper in CopyFiles */ = {isa = PBXBuildFile; fileRef = A3000020 /* MacMuteHelper */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		A1000040 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A2000040 /* Assets.xcassets */; };
+		A1000010 /* ToggleConfirmation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000012 /* ToggleConfirmation.swift */; };
+		A1000050 /* ToggleConfirmation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000012 /* ToggleConfirmation.swift */; };
+		A1000051 /* ToggleConfirmationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000050 /* ToggleConfirmationTests.swift */; };
+		A1000052 /* SocketServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000006 /* SocketServer.swift */; };
+		A1000053 /* SocketServerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000051 /* SocketServerTests.swift */; };
+		A1000054 /* GlobalShortcutManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000004 /* GlobalShortcutManager.swift */; };
+		A1000055 /* ShortcutMatcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000052 /* ShortcutMatcherTests.swift */; };
+		A1000056 /* UnconfirmedFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000053 /* UnconfirmedFeedback.swift */; };
+		A1000057 /* UnconfirmedFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000053 /* UnconfirmedFeedback.swift */; };
+		A1000058 /* UnconfirmedFeedbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000054 /* UnconfirmedFeedbackTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -61,6 +71,13 @@
 		A2000020 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		A3000010 /* MacMute.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MacMute.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A3000020 /* MacMuteHelper */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = MacMuteHelper; sourceTree = BUILT_PRODUCTS_DIR; };
+		A2000012 /* ToggleConfirmation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToggleConfirmation.swift; sourceTree = "<group>"; };
+		A2000050 /* ToggleConfirmationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToggleConfirmationTests.swift; sourceTree = "<group>"; };
+		A2000051 /* SocketServerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocketServerTests.swift; sourceTree = "<group>"; };
+		A2000052 /* ShortcutMatcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutMatcherTests.swift; sourceTree = "<group>"; };
+		A2000053 /* UnconfirmedFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnconfirmedFeedback.swift; sourceTree = "<group>"; };
+		A2000054 /* UnconfirmedFeedbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnconfirmedFeedbackTests.swift; sourceTree = "<group>"; };
+		A3000030 /* MacMuteTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MacMuteTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -78,6 +95,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A4000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -86,6 +110,7 @@
 			children = (
 				A6000002 /* MacMute */,
 				A6000003 /* MacMuteHelper */,
+				A6000005 /* MacMuteTests */,
 				A6000004 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -101,6 +126,8 @@
 				A2000006 /* SocketServer.swift */,
 				A2000007 /* AudioManager.swift */,
 				A2000008 /* MuteStateManager.swift */,
+				A2000012 /* ToggleConfirmation.swift */,
+				A2000053 /* UnconfirmedFeedback.swift */,
 				A2000011 /* main.swift */,
 				A2000009 /* Info.plist */,
 				A2000010 /* MacMute.entitlements */,
@@ -122,8 +149,20 @@
 			children = (
 				A3000010 /* MacMute.app */,
 				A3000020 /* MacMuteHelper */,
+				A3000030 /* MacMuteTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		A6000005 /* MacMuteTests */ = {
+			isa = PBXGroup;
+			children = (
+				A2000050 /* ToggleConfirmationTests.swift */,
+				A2000051 /* SocketServerTests.swift */,
+				A2000052 /* ShortcutMatcherTests.swift */,
+				A2000054 /* UnconfirmedFeedbackTests.swift */,
+			);
+			path = MacMuteTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -164,6 +203,22 @@
 			productReference = A3000020 /* MacMuteHelper */;
 			productType = "com.apple.product-type.tool";
 		};
+		A7000003 /* MacMuteTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A9000004 /* Build configuration list for PBXNativeTarget "MacMuteTests" */;
+			buildPhases = (
+				A8000004 /* Sources */,
+				A4000003 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MacMuteTests;
+			productName = MacMuteTests;
+			productReference = A3000030 /* MacMuteTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -189,6 +244,7 @@
 			targets = (
 				A7000001 /* MacMute */,
 				A7000002 /* MacMuteHelper */,
+				A7000003 /* MacMuteTests */,
 			);
 		};
 /* End PBXProject section */
@@ -206,6 +262,8 @@
 				A1000006 /* SocketServer.swift in Sources */,
 				A1000007 /* AudioManager.swift in Sources */,
 				A1000008 /* MuteStateManager.swift in Sources */,
+				A1000010 /* ToggleConfirmation.swift in Sources */,
+				A1000056 /* UnconfirmedFeedback.swift in Sources */,
 				A1000009 /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -215,6 +273,21 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1000020 /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A8000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1000050 /* ToggleConfirmation.swift in Sources */,
+				A1000051 /* ToggleConfirmationTests.swift in Sources */,
+				A1000052 /* SocketServer.swift in Sources */,
+				A1000053 /* SocketServerTests.swift in Sources */,
+				A1000054 /* GlobalShortcutManager.swift in Sources */,
+				A1000055 /* ShortcutMatcherTests.swift in Sources */,
+				A1000057 /* UnconfirmedFeedback.swift in Sources */,
+				A1000058 /* UnconfirmedFeedbackTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -359,6 +432,38 @@
 			};
 			name = Release;
 		};
+		B4000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.macmute.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		B4000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.macmute.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -385,6 +490,15 @@
 			buildConfigurations = (
 				B1000001 /* Debug */,
 				B1000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A9000004 /* Build configuration list for PBXNativeTarget "MacMuteTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B4000001 /* Debug */,
+				B4000002 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
