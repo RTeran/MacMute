@@ -6,6 +6,8 @@ class StatusBarController {
     private let muteStateManager: MuteStateManager
     private var popover: NSPopover
     private var outsideClickMonitor: Any?
+    private var previousApp: NSRunningApplication?
+    private var lastCloseDate: Date?
 
     init(muteStateManager: MuteStateManager) {
         self.muteStateManager = muteStateManager
@@ -42,11 +44,17 @@ class StatusBarController {
     }
 
     @objc private func togglePopover() {
+        // `.transient` can close the popover on mouse-down over the status button; the button
+        // action then arrives on mouse-up and would reopen it.
+        if let lastCloseDate, Date().timeIntervalSince(lastCloseDate) < 0.2 {
+            return
+        }
         if popover.isShown {
             popover.performClose(nil)
         } else if let button = statusItem.button {
             // MacMute is an agent app (LSUIElement), so it is not active when the popover opens and
             // `.transient` never sees clicks outside it. Activating also lets the shortcut recorder get keys.
+            rememberFrontmostApp()
             activateApp()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             startMonitoringOutsideClicks()
@@ -54,6 +62,11 @@ class StatusBarController {
                 self?.constrainPopoverToScreen()
             }
         }
+    }
+
+    private func rememberFrontmostApp() {
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        previousApp = frontmost == NSRunningApplication.current ? nil : frontmost
     }
 
     private func activateApp() {
@@ -69,6 +82,8 @@ class StatusBarController {
     private func startMonitoringOutsideClicks() {
         guard outsideClickMonitor == nil else { return }
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            // The click already sends focus to whatever the user clicked; restoring the previous app would steal it.
+            self?.previousApp = nil
             self?.popover.performClose(nil)
         }
     }
@@ -78,6 +93,12 @@ class StatusBarController {
             NSEvent.removeMonitor(monitor)
             outsideClickMonitor = nil
         }
+        lastCloseDate = Date()
+        // Hiding the app would also hide the overlay window, so hand focus back explicitly.
+        if NSApp.isActive {
+            previousApp?.activate()
+        }
+        previousApp = nil
     }
 
     private func constrainPopoverToScreen() {
