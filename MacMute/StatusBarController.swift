@@ -41,6 +41,12 @@ class StatusBarController {
             name: NSPopover.didCloseNotification,
             object: popover
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(popoverWillClose),
+            name: NSPopover.willCloseNotification,
+            object: popover
+        )
     }
 
     @objc private func togglePopover() {
@@ -66,7 +72,7 @@ class StatusBarController {
 
     private func rememberFrontmostApp() {
         let frontmost = NSWorkspace.shared.frontmostApplication
-        previousApp = frontmost == NSRunningApplication.current ? nil : frontmost
+        previousApp = frontmost?.processIdentifier == NSRunningApplication.current.processIdentifier ? nil : frontmost
     }
 
     private func activateApp() {
@@ -95,12 +101,15 @@ class StatusBarController {
         }
     }
 
+    @objc private func popoverWillClose() {
+        lastCloseDate = Date()
+    }
+
     @objc private func popoverDidClose() {
         if let monitor = outsideClickMonitor {
             NSEvent.removeMonitor(monitor)
             outsideClickMonitor = nil
         }
-        lastCloseDate = Date()
         // Hiding the app would also hide the overlay window, so hand focus back explicitly.
         if NSApp.isActive {
             previousApp?.activate()
