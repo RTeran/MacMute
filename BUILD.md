@@ -31,10 +31,13 @@ cp -R ~/Library/Developer/Xcode/DerivedData/MacMute-*/Build/Products/Release/Mac
 
 ## First run
 
-1. Open MacMute from `/Applications`
-2. Grant **Accessibility** permission when prompted (System Settings → Privacy & Security → Accessibility)
-3. Open `chrome://extensions` in Chrome, reload the MacMute extension so it picks up the new native messaging manifest
-4. Configure a global shortcut by clicking the mic icon in the menu bar
+1. Load the extension first: open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked** and select the `chrome-extension/` folder. The app looks for the extension when it starts.
+2. Open MacMute from `/Applications`
+3. Grant **Accessibility** permission when prompted (System Settings → Privacy & Security → Accessibility)
+4. Reload the MacMute extension in `chrome://extensions` so it picks up the new native messaging manifest, and reload any open Meet tab
+5. Configure a global shortcut by clicking the mic icon in the menu bar
+
+See [README.md](README.md) for an overview, troubleshooting and tests.
 
 ## Update
 
