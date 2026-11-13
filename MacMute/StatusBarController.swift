@@ -6,6 +6,9 @@ class StatusBarController {
     private let muteStateManager: MuteStateManager
     private var popover: NSPopover
     private var isShowingUnconfirmedAlert = false
+    private var outsideClickMonitor: Any?
+    private var previousApp: NSRunningApplication?
+    private var lastCloseDate: Date?
 
     init(muteStateManager: MuteStateManager) {
         self.muteStateManager = muteStateManager
@@ -45,17 +48,86 @@ class StatusBarController {
             name: .unconfirmedToggleFeedbackDidEnd,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(popoverDidClose),
+            name: NSPopover.didCloseNotification,
+            object: popover
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(popoverWillClose),
+            name: NSPopover.willCloseNotification,
+            object: popover
+        )
     }
 
     @objc private func togglePopover() {
+        // `.transient` can close the popover on mouse-down over the status button; the button
+        // action then arrives on mouse-up and would reopen it.
+        if let lastCloseDate, Date().timeIntervalSince(lastCloseDate) < 0.2 {
+            return
+        }
         if popover.isShown {
             popover.performClose(nil)
         } else if let button = statusItem.button {
+            // MacMute is an agent app (LSUIElement), so it is not active when the popover opens and
+            // `.transient` never sees clicks outside it. Activating also lets the shortcut recorder get keys.
+            rememberFrontmostApp()
+            activateApp()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            startMonitoringOutsideClicks()
             DispatchQueue.main.async { [weak self] in
                 self?.constrainPopoverToScreen()
             }
         }
+    }
+
+    private func rememberFrontmostApp() {
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        previousApp = frontmost?.processIdentifier == NSRunningApplication.current.processIdentifier ? nil : frontmost
+    }
+
+    private func activateApp() {
+        if #available(macOS 14, *) {
+            NSApp.activate()
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+
+    // A global monitor only sees events sent to other apps, so clicks on the status button
+    // or inside the popover never reach it. That covers other menu-bar items too.
+    private func startMonitoringOutsideClicks() {
+        guard outsideClickMonitor == nil else { return }
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            guard let self else { return }
+            // The clicked app may still be taking focus; only hand it back if nothing took it,
+            // as with menu-bar items that do not activate their app.
+            let appToRestore = self.previousApp
+            self.previousApp = nil
+            self.popover.performClose(nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                guard let self, NSApp.isActive, !self.popover.isShown else { return }
+                appToRestore?.activate()
+            }
+        }
+    }
+
+    @objc private func popoverWillClose() {
+        lastCloseDate = Date()
+    }
+
+    @objc private func popoverDidClose() {
+        if let monitor = outsideClickMonitor {
+            NSEvent.removeMonitor(monitor)
+            outsideClickMonitor = nil
+        }
+        // Hiding the app would also hide the overlay window, so hand focus back explicitly.
+        if NSApp.isActive {
+            previousApp?.activate()
+        }
+        previousApp = nil
     }
 
     private func constrainPopoverToScreen() {
