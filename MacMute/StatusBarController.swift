@@ -82,9 +82,16 @@ class StatusBarController {
     private func startMonitoringOutsideClicks() {
         guard outsideClickMonitor == nil else { return }
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            // The click already sends focus to whatever the user clicked; restoring the previous app would steal it.
-            self?.previousApp = nil
-            self?.popover.performClose(nil)
+            guard let self else { return }
+            // The clicked app may still be taking focus; only hand it back if nothing took it,
+            // as with menu-bar items that do not activate their app.
+            let appToRestore = self.previousApp
+            self.previousApp = nil
+            self.popover.performClose(nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                guard let self, NSApp.isActive, !self.popover.isShown else { return }
+                appToRestore?.activate()
+            }
         }
     }
 
