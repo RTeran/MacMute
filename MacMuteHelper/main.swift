@@ -1,4 +1,9 @@
 import Foundation
+import os
+
+enum HelperLog {
+    static let logger = Logger(subsystem: "com.macmute.app", category: "helper")
+}
 
 // MARK: - Native Messaging Protocol (stdin/stdout with 4-byte length prefix)
 
@@ -25,20 +30,51 @@ class NativeMessaging {
     }
 
     static func writeMessage(_ message: [String: Any]) {
-        guard let data = try? JSONSerialization.data(withJSONObject: message) else { return }
+        let data: Data
+        do {
+            data = try JSONSerialization.data(withJSONObject: message)
+        } catch {
+            HelperLog.logger.error("Failed to serialize message for Chrome \(String(describing: message), privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return
+        }
 
         let length = UInt32(data.count)
-        var lengthBytes = [UInt8](repeating: 0, count: 4)
-        lengthBytes[0] = UInt8(length & 0xFF)
-        lengthBytes[1] = UInt8((length >> 8) & 0xFF)
-        lengthBytes[2] = UInt8((length >> 16) & 0xFF)
-        lengthBytes[3] = UInt8((length >> 24) & 0xFF)
+        let lengthBytes: [UInt8] = [
+            UInt8(length & 0xFF),
+            UInt8((length >> 8) & 0xFF),
+            UInt8((length >> 16) & 0xFF),
+            UInt8((length >> 24) & 0xFF),
+        ]
 
-        fwrite(lengthBytes, 1, 4, stdout)
-        _ = data.withUnsafeBytes { rawBuffer in
+        let headerWritten = fwrite(lengthBytes, 1, 4, stdout)
+        let bodyWritten = data.withUnsafeBytes { rawBuffer in
             fwrite(rawBuffer.baseAddress, 1, data.count, stdout)
         }
-        fflush(stdout)
+        guard headerWritten == 4, bodyWritten == data.count, fflush(stdout) == 0 else {
+            failStdoutWrite(written: headerWritten + bodyWritten, total: 4 + data.count)
+        }
+    }
+
+    // A partial frame desyncs the length-prefixed stream, so any later message would be garbage.
+    private static func failStdoutWrite(written: Int, total: Int) -> Never {
+        HelperLog.logger.fault("Failed to write to Chrome (\(written, privacy: .public)/\(total, privacy: .public) bytes): \(String(cString: strerror(errno)), privacy: .public)")
+        exit(1)
+    }
+}
+
+func writeFully(_ fd: Int32, _ data: Data) -> (written: Int, errno: Int32?) {
+    data.withUnsafeBytes { rawBuffer in
+        guard let base = rawBuffer.baseAddress else { return (0, nil) }
+        var offset = 0
+        while offset < data.count {
+            let result = Darwin.write(fd, base + offset, data.count - offset)
+            if result < 0 {
+                if errno == EINTR { continue }
+                return (offset, errno)
+            }
+            offset += result
+        }
+        return (offset, nil)
     }
 }
 
@@ -63,7 +99,7 @@ class SocketClient {
     func connect() -> Bool {
         socketFD = socket(AF_UNIX, SOCK_STREAM, 0)
         guard socketFD >= 0 else {
-            NSLog("MacMuteHelper: Failed to create socket")
+            HelperLog.logger.error("Failed to create socket: \(String(cString: strerror(errno)), privacy: .public)")
             return false
         }
 
@@ -83,59 +119,71 @@ class SocketClient {
         }
 
         guard connectResult == 0 else {
-            NSLog("MacMuteHelper: Failed to connect to socket at \(socketPath): \(String(cString: strerror(errno)))")
+            HelperLog.logger.info("Failed to connect to socket \((self.socketPath as NSString).lastPathComponent, privacy: .public): \(String(cString: strerror(errno)), privacy: .public)")
             close(socketFD)
             socketFD = -1
             return false
         }
 
-        NSLog("MacMuteHelper: Connected to MacMute app")
+        // Writing to an app that just quit must fail with EPIPE instead of killing the helper.
+        var noSigPipe: Int32 = 1
+        if setsockopt(socketFD, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size)) != 0 {
+            HelperLog.logger.error("Failed to set SO_NOSIGPIPE: \(String(cString: strerror(errno)), privacy: .public)")
+        }
+
+        HelperLog.logger.notice("Connected to MacMute app")
         startReading()
         return true
     }
 
+    // The read source's cancel handler owns closing the fd.
     func disconnect() {
         readSource?.cancel()
-        if socketFD >= 0 {
-            close(socketFD)
-            socketFD = -1
-        }
+        readSource = nil
+        socketFD = -1
     }
 
     func sendMessage(_ message: [String: Any]) {
         queue.async { [weak self] in
             guard let self = self, self.socketFD >= 0 else {
-                NSLog("MacMuteHelper: Cannot send, not connected to app")
+                HelperLog.logger.error("Cannot send to app, not connected: \(String(describing: message), privacy: .public)")
                 return
             }
 
-            guard let data = try? JSONSerialization.data(withJSONObject: message) else { return }
-            var messageData = data
+            var messageData: Data
+            do {
+                messageData = try JSONSerialization.data(withJSONObject: message)
+            } catch {
+                HelperLog.logger.error("Failed to serialize message for app \(String(describing: message), privacy: .public): \(error.localizedDescription, privacy: .public)")
+                return
+            }
             messageData.append(0x0A) // newline delimiter
 
-            messageData.withUnsafeBytes { rawBuffer in
-                guard let ptr = rawBuffer.baseAddress else { return }
-                let written = Darwin.write(self.socketFD, ptr, messageData.count)
-                if written < 0 {
-                    NSLog("MacMuteHelper: Write to socket failed: \(String(cString: strerror(errno)))")
-                }
+            let (written, writeErrno) = writeFully(self.socketFD, messageData)
+            if written != messageData.count {
+                let cause = writeErrno.map { String(cString: strerror($0)) } ?? "no buffer"
+                HelperLog.logger.error("Write to app failed (\(written, privacy: .public)/\(messageData.count, privacy: .public) bytes): \(cause, privacy: .public)")
             }
         }
     }
 
     private func startReading() {
-        let source = DispatchSource.makeReadSource(fileDescriptor: socketFD, queue: queue)
+        let fd = socketFD
+        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         var buffer = Data()
 
-        source.setEventHandler { [weak self] in
+        source.setEventHandler { [weak self, unowned source] in
             guard let self = self else { return }
             var readBuffer = [UInt8](repeating: 0, count: 4096)
-            let bytesRead = read(self.socketFD, &readBuffer, readBuffer.count)
+            let bytesRead = read(fd, &readBuffer, readBuffer.count)
 
             if bytesRead <= 0 {
-                NSLog("MacMuteHelper: Disconnected from app")
-                self.readSource?.cancel()
-                self.socketFD = -1
+                HelperLog.logger.notice("Disconnected from app (\(bytesRead < 0 ? String(cString: strerror(errno)) : "end of stream", privacy: .public))")
+                source.cancel()
+                if self.socketFD == fd {
+                    self.socketFD = -1
+                    self.readSource = nil
+                }
                 self.onDisconnected?()
                 return
             }
@@ -146,17 +194,16 @@ class SocketClient {
                 let messageData = buffer[buffer.startIndex..<newlineIndex]
                 buffer = Data(buffer[buffer.index(after: newlineIndex)...])
 
-                if let json = try? JSONSerialization.jsonObject(with: messageData) as? [String: Any] {
-                    self.onMessageReceived?(json)
+                guard let json = try? JSONSerialization.jsonObject(with: messageData) as? [String: Any] else {
+                    HelperLog.logger.error("Dropping undecodable message from app: \(String(decoding: messageData, as: UTF8.self), privacy: .public)")
+                    continue
                 }
+                self.onMessageReceived?(json)
             }
         }
 
-        source.setCancelHandler { [weak self] in
-            if let fd = self?.socketFD, fd >= 0 {
-                close(fd)
-                self?.socketFD = -1
-            }
+        source.setCancelHandler {
+            close(fd)
         }
 
         source.resume()
@@ -166,27 +213,30 @@ class SocketClient {
 
 // MARK: - Main
 
+// Chrome closing stdout must surface as a write error, not a SIGPIPE that kills the helper.
+signal(SIGPIPE, SIG_IGN)
+
 let socketClient = SocketClient()
 
 // Messages from the app → forward to Chrome extension
 socketClient.onMessageReceived = { message in
-    NSLog("MacMuteHelper: Relaying app → extension: \(message)")
+    HelperLog.logger.info("Relaying app → extension: \(String(describing: message), privacy: .public)")
     NativeMessaging.writeMessage(message)
 }
 
 func scheduleConnect(delay: TimeInterval = 0) {
     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
         if socketClient.connect() {
-            NSLog("MacMuteHelper: Socket connected")
+            HelperLog.logger.notice("Socket connected")
         } else {
-            NSLog("MacMuteHelper: Connection failed, retrying in 2s...")
+            HelperLog.logger.info("Connection failed, retrying in 2s")
             scheduleConnect(delay: 2.0)
         }
     }
 }
 
 socketClient.onDisconnected = {
-    NSLog("MacMuteHelper: Socket disconnected, will reconnect")
+    HelperLog.logger.notice("Socket disconnected, will reconnect")
     scheduleConnect(delay: 2.0)
 }
 
@@ -197,11 +247,11 @@ scheduleConnect()
 DispatchQueue.global(qos: .userInteractive).async {
     while true {
         guard let message = NativeMessaging.readMessage() else {
-            NSLog("MacMuteHelper: stdin closed, exiting")
+            HelperLog.logger.notice("stdin closed, exiting")
             exit(0)
         }
 
-        NSLog("MacMuteHelper: Relaying extension → app: \(message)")
+        HelperLog.logger.info("Relaying extension → app: \(String(describing: message), privacy: .public)")
         socketClient.sendMessage(message)
     }
 }
