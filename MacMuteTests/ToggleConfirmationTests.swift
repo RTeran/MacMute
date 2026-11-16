@@ -23,8 +23,8 @@ private final class FakeTimer: ToggleTimer {
 }
 
 private final class Harness {
-    var confirmedMuted = false
-    var confirmedCameraOff = false
+    var confirmedMuted: Bool? = false
+    var confirmedCameraOff: Bool? = false
     var sendOutcome = ToggleSendOutcome.sent
     private(set) var sentRequests: [(target: ToggleTarget, requestId: String)] = []
     private(set) var timers: [FakeTimer] = []
@@ -163,15 +163,90 @@ final class ToggleConfirmationTests: XCTestCase {
         XCTAssertNil(harness.confirmation.pendingToggles.pending[.mic])
     }
 
-    func testFirstPressFailingWhileSecondIsPendingThenSecondReachingTheWrongStateShowsFeedback() {
+    func testAFirstPressFailingWhileTheSecondIsPendingShowsFeedback() {
         harness.confirmation.toggle(.mic)
         harness.confirmation.toggle(.mic)
-        harness.fail(.mic, "r1", reason: "timeout")
-        XCTAssertTrue(harness.feedbackStarts.isEmpty)
+        harness.fail(.mic, "r1", reason: "button_not_found")
+        XCTAssertEqual(harness.feedbackStarts, [.mic])
 
         harness.confirm(.mic, "r2", newState: true)
 
+        XCTAssertEqual(harness.feedbackStarts, [.mic, .mic])
+    }
+
+    func testWithoutBaselineAFailedFirstPressKeepsItsWarningWhenTheSecondConfirms() {
+        harness.confirmedMuted = nil
+        harness.confirmation.toggle(.mic)
+        harness.confirmation.toggle(.mic)
+
+        harness.fail(.mic, "r1", reason: "button_not_found")
+        harness.confirm(.mic, "r2", newState: true)
+
         XCTAssertEqual(harness.feedbackStarts, [.mic])
+        XCTAssertEqual(harness.feedbackEnds, 0)
+        XCTAssertTrue(harness.confirmation.isShowingUnconfirmedFeedback)
+    }
+
+    func testWithoutBaselineAFirstPressFailingAfterTheSecondConfirmedShowsFeedback() {
+        harness.confirmedMuted = nil
+        harness.confirmation.toggle(.mic)
+        harness.confirmation.toggle(.mic)
+
+        harness.confirm(.mic, "r2", newState: true)
+        harness.fail(.mic, "r1", reason: "button_not_found")
+
+        XCTAssertEqual(harness.feedbackStarts, [.mic])
+        XCTAssertTrue(harness.confirmation.isShowingUnconfirmedFeedback)
+    }
+
+    func testWithoutBaselineAnOlderPressConfirmingDoesNotEndTheWarningOfANewerOne() {
+        harness.confirmedMuted = nil
+        harness.confirmation.toggle(.mic)
+        harness.confirmation.toggle(.mic)
+        harness.fail(.mic, "r2", reason: "busy")
+
+        harness.confirm(.mic, "r1", newState: false)
+
+        XCTAssertTrue(harness.confirmation.isShowingUnconfirmedFeedback)
+        XCTAssertEqual(harness.feedbackEnds, 0)
+    }
+
+    func testAPressMadeAfterTheWarningEndsItWhenConfirmed() {
+        harness.confirmation.toggle(.mic)
+        harness.confirmationTimer(0).fire()
+
+        harness.confirmation.toggle(.mic)
+        harness.confirm(.mic, "r2", newState: true)
+
+        XCTAssertEqual(harness.feedbackEnds, 1)
+        XCTAssertEqual(harness.confirmations.map(\.target), [.mic])
+    }
+
+    func testAPressThatIsNoLongerPendingExpiresSilentlyAtItsTimeout() {
+        harness.confirmation.toggle(.mic)
+        harness.confirmation.toggle(.mic)
+
+        harness.confirmationTimer(0).fire()
+        harness.fail(.mic, "r1", reason: "button_not_found")
+
+        XCTAssertTrue(harness.feedbackStarts.isEmpty)
+        XCTAssertEqual(harness.confirmation.pendingToggles.pending[.mic]?.requestId, "r2")
+        XCTAssertFalse(harness.confirmationTimer(1).isCancelled)
+    }
+
+    func testKeepsAtMost32OutstandingPressesButNeverDropsAPendingOne() {
+        harness.confirmation.toggle(.camera)
+        for _ in 0..<ToggleConfirmation.maxOutstandingPresses {
+            harness.confirmation.toggle(.mic)
+        }
+
+        harness.fail(.mic, "r2", reason: "button_not_found")
+        XCTAssertTrue(harness.feedbackStarts.isEmpty)
+        XCTAssertTrue(harness.confirmationTimer(1).isCancelled)
+
+        harness.fail(.mic, "r3", reason: "button_not_found")
+        harness.fail(.camera, "r1", reason: "button_not_found")
+        XCTAssertEqual(harness.feedbackStarts, [.mic, .camera])
     }
 
     func testSuccessWithoutRequestIdConfirmsWhenItReachesTheExpectedState() {
