@@ -20,49 +20,61 @@ Global shortcut ─▶ MacMute.app ─▶ MacMuteHelper ─▶ Chrome extension 
 - `MacMuteHelper/`: a small native messaging host that Chrome starts. It relays messages between the extension and the app.
 - `chrome-extension/`: a Manifest V3 extension that clicks the Meet buttons and reports the result.
 
-## Requirements
-
-- macOS 13 (Ventura) or later
-- Xcode 15 or later
-- Google Chrome 111 or later
-- Node.js, only to run the extension tests
-
 ## Install
 
-The order matters: the app looks for the extension in your Chrome profiles when it starts, and only then allows it to connect.
+Download both files from the [latest release](https://github.com/RTeran/MacMute/releases/latest):
 
-1. **Load the extension in Chrome**
-   1. Open `chrome://extensions`.
-   2. Turn on **Developer mode**.
-   3. Click **Load unpacked** and select the `chrome-extension/` folder of this repo.
+- `MacMute-app.zip`: the menu-bar app (universal: Apple Silicon and Intel).
+- `MacMute-chrome-extension.zip`: the Chrome extension.
 
-2. **Build and install the app**
+You need macOS 13 (Ventura) or later and Google Chrome 111 or later.
 
-   ```bash
-   xcodebuild -project MacMute.xcodeproj -scheme MacMute -configuration Release clean build && \
-   cp -R ~/Library/Developer/Xcode/DerivedData/MacMute-*/Build/Products/Release/MacMute.app /Applications/
-   ```
+The order matters: the app looks for the extension in your Chrome profiles when it starts, and only then allows it to connect. Install the extension first.
 
-3. **Open MacMute** from `/Applications` and grant **Accessibility** permission when asked (System Settings → Privacy & Security → Accessibility). Global shortcuts need it.
+### 1. Install the Chrome extension
 
-4. **Reload the extension** in `chrome://extensions` and reload any open Meet tab.
+1. Unzip `MacMute-chrome-extension.zip`. You get a folder named `MacMute-chrome-extension`.
+2. Move that folder to a permanent place, for example `~/Applications/MacMute-chrome-extension`. Chrome loads the extension from this folder every time it starts, so do not delete it or leave it in `Downloads`.
+3. Keep `MacMute` in the folder name. The app uses it to find the extension.
+4. Open `chrome://extensions` in Chrome.
+5. Turn on **Developer mode** (top-right switch).
+6. Click **Load unpacked** and select the `MacMute-chrome-extension` folder.
 
-5. **Set your shortcuts**: click the MacMute icon in the menu bar and record a shortcut for the microphone and one for the camera.
+### 2. Install the app
+
+1. Unzip `MacMute-app.zip` and move `MacMute.app` to `/Applications`.
+2. Open it once. The app is not notarized by Apple, so macOS blocks it the first time with a message like *"MacMute" cannot be opened* or *Apple could not verify "MacMute"*. Allow it in one of these two ways:
+   - Open **System Settings → Privacy & Security**, scroll down to the message about MacMute and click **Open Anyway**. Then open the app again.
+   - Or run this command in Terminal:
+
+     ```bash
+     xattr -dr com.apple.quarantine /Applications/MacMute.app
+     ```
+
+3. Grant **Accessibility** permission when asked (System Settings → Privacy & Security → Accessibility). Global shortcuts need it.
+
+### 3. Connect them
+
+1. Go back to `chrome://extensions` and click the reload icon on the MacMute extension.
+2. Reload any open Google Meet tab.
+3. Click the MacMute icon in the menu bar and record a shortcut for the microphone and one for the camera.
 
 If you install the extension after opening the app, quit and reopen MacMute so it picks up the extension.
 
-## Update
+### Update
 
-Pull the changes, then rebuild and reinstall the app:
+1. Download the new files from the [latest release](https://github.com/RTeran/MacMute/releases/latest).
+2. Quit MacMute, replace `/Applications/MacMute.app` with the new one and allow it again as in step 2.
+3. Replace the contents of your `MacMute-chrome-extension` folder with the new ones and click reload in `chrome://extensions`.
+4. Reload the Meet tab.
 
-```bash
-xcodebuild -project MacMute.xcodeproj -scheme MacMute -configuration Release clean build && \
-cp -R ~/Library/Developer/Xcode/DerivedData/MacMute-*/Build/Products/Release/MacMute.app /Applications/
-```
+The app is signed ad hoc, so macOS may forget the Accessibility permission after an update. If the shortcuts stop working, remove MacMute from the Accessibility list and add it again.
 
-Then reload the extension in `chrome://extensions` and reload the Meet tab.
+### Uninstall
 
-The app is signed ad hoc, so macOS may forget the Accessibility permission after a rebuild. If the shortcuts stop working, remove MacMute from the Accessibility list and add it again.
+1. Quit MacMute and delete `/Applications/MacMute.app`.
+2. Remove the extension in `chrome://extensions` and delete its folder.
+3. Delete `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.macmute.helper.json`.
 
 ## Troubleshooting
 
@@ -78,6 +90,19 @@ Each shortcut press logs the request and its result (`toggle_result`), including
 
 ## Development
 
+Requirements: Xcode 15 or later, and Node.js for the extension tests.
+
+### Build from source
+
+Load the `chrome-extension/` folder of this repo with **Load unpacked** (see above), then build and install the app:
+
+```bash
+xcodebuild -project MacMute.xcodeproj -scheme MacMute -configuration Release clean build && \
+cp -R ~/Library/Developer/Xcode/DerivedData/MacMute-*/Build/Products/Release/MacMute.app /Applications/
+```
+
+### Tests
+
 Run the extension tests:
 
 ```bash
@@ -90,4 +115,18 @@ Run the app tests and build:
 ```bash
 xcodebuild -project MacMute.xcodeproj -scheme MacMute test
 xcodebuild -project MacMute.xcodeproj -scheme MacMute build
+```
+
+### Publish a release
+
+Build a universal app and package both downloads:
+
+```bash
+xcodebuild -project MacMute.xcodeproj -scheme MacMute -configuration Release \
+  -derivedDataPath build ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO clean build
+mkdir -p dist
+ditto -c -k --keepParent build/Build/Products/Release/MacMute.app dist/MacMute-app.zip
+cp -R chrome-extension dist/MacMute-chrome-extension
+(cd dist && zip -qr MacMute-chrome-extension.zip MacMute-chrome-extension && rm -rf MacMute-chrome-extension)
+gh release create vX.Y dist/MacMute-app.zip dist/MacMute-chrome-extension.zip
 ```
