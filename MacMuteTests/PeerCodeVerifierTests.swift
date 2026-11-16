@@ -328,12 +328,15 @@ final class PeerCodeVerifierTests: XCTestCase {
     // The tests run in xctest, not in the app, so this reads the built app and helper from disk.
     func testABuildWithAPinRejectsItsAdHocSignature() throws {
         let app = Bundle(for: Self.self).bundleURL.deletingLastPathComponent().appendingPathComponent("MacMute.app")
-        for binary in [app, app.appendingPathComponent("Contents/Resources/MacMuteHelper")] {
-            let identity = try PeerCodeVerifier.signingIdentity(of: try staticCode(at: binary)).get()
-            guard let pin = try PeerCodeVerifier.leafPin(from: identity.infoPlist).get() else {
-                throw XCTSkip("Built without MACMUTE_LEAF_PIN. Run the tests with MACMUTE_LEAF_PIN=<40 hex> to check a pinned build.")
-            }
+        let binaries = [app, app.appendingPathComponent("Contents/Resources/MacMuteHelper")]
+        let identities = try binaries.map { try PeerCodeVerifier.signingIdentity(of: try staticCode(at: $0)).get() }
+        let pins = try identities.map { try PeerCodeVerifier.leafPin(from: $0.infoPlist).get() }
+        XCTAssertEqual(pins[0], pins[1])
+        guard let pin = pins[0] else {
+            throw XCTSkip("Built without MACMUTE_LEAF_PIN. Run the tests with MACMUTE_LEAF_PIN=<40 hex> to check a pinned build.")
+        }
 
+        for (binary, identity) in zip(binaries, identities) {
             XCTAssertNil(identity.leaf, binary.lastPathComponent)
             XCTAssertEqual(PeerCodeVerifier.leafPinCheck(pin: pin, leafHash: nil).failure, .ownLeafNotPinned, binary.lastPathComponent)
         }
