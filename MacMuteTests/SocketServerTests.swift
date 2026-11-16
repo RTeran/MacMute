@@ -11,6 +11,8 @@ final class SocketServerTests: XCTestCase {
     private var disconnections: [ClientID: XCTestExpectation] = [:]
     private var received: [(ClientID, [String: Any])] = []
     private var messageArrived: XCTestExpectation?
+    private var states: [SocketServerState] = []
+    private var awaitedState: (state: SocketServerState, arrived: XCTestExpectation)?
 
     override func setUp() {
         super.setUp()
@@ -37,7 +39,20 @@ final class SocketServerTests: XCTestCase {
     }
 
     private func startServer(maxClients: Int, makeVerifyPeer: @escaping SocketServer.MakeVerifyPeer) {
-        server = SocketServer(socketPath: socketPath, maxClients: maxClients, makeVerifyPeer: makeVerifyPeer)
+        server = SocketServer(
+            socketPath: socketPath,
+            maxClients: maxClients,
+            retryBackoff: RetryBackoff(first: 0.02, maximum: 0.05),
+            makeVerifyPeer: makeVerifyPeer
+        )
+        server.onStateChange = { [weak self] state in
+            guard let self else { return }
+            self.states.append(state)
+            if let awaited = self.awaitedState, awaited.state == state {
+                self.awaitedState = nil
+                awaited.arrived.fulfill()
+            }
+        }
         server.onClientConnected = { [weak self] id in
             guard let self else { return }
             self.connectedIDs.append(id)
@@ -363,6 +378,52 @@ final class SocketServerTests: XCTestCase {
         _ = connectHelper()
     }
 
+    func testRetriesUntilTheSocketCanBeBound() throws {
+        server.stop()
+        try FileManager.default.createDirectory(atPath: socketPath + "/blocker", withIntermediateDirectories: true)
+        let cappedRetry = expectState(.retrying(after: 0.05))
+        startServer()
+        wait(for: [cappedRetry], timeout: 2)
+
+        let listening = expectState(.listening)
+        try FileManager.default.removeItem(atPath: socketPath)
+        wait(for: [listening], timeout: 2)
+
+        XCTAssertEqual(Array(states.prefix(3)), [.retrying(after: 0.02), .retrying(after: 0.04), .retrying(after: 0.05)])
+        _ = connectHelper()
+    }
+
+    func testStoppingCancelsAPendingRetry() throws {
+        server.stop()
+        try FileManager.default.createDirectory(atPath: socketPath + "/blocker", withIntermediateDirectories: true)
+        let firstRetry = expectState(.retrying(after: 0.02))
+        startServer()
+        wait(for: [firstRetry], timeout: 2)
+
+        server.stop()
+        try FileManager.default.removeItem(atPath: socketPath)
+        let settled = expectation(description: "retries would have run")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { settled.fulfill() }
+        wait(for: [settled], timeout: 2)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: socketPath))
+        XCTAssertFalse(states.contains(.listening), "\(states)")
+    }
+
+    func testStartingAgainBeginsTheBackoffFromTheFirstDelay() throws {
+        server.stop()
+        try FileManager.default.createDirectory(atPath: socketPath + "/blocker", withIntermediateDirectories: true)
+        let cappedRetry = expectState(.retrying(after: 0.05))
+        startServer()
+        wait(for: [cappedRetry], timeout: 2)
+        server.stop()
+
+        // Once capped, only 0.05 is reported, so a 0.02 can only come from the new start.
+        let firstRetry = expectState(.retrying(after: 0.02))
+        server.start()
+        wait(for: [firstRetry], timeout: 2)
+    }
+
     func testStoppingLeavesAFileThatReplacedItsSocket() {
         _ = connectHelper()
         unlink(socketPath)
@@ -501,6 +562,12 @@ final class SocketServerTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    private func expectState(_ state: SocketServerState) -> XCTestExpectation {
+        let arrived = expectation(description: "state \(state)")
+        awaitedState = (state, arrived)
+        return arrived
+    }
 
     private func inode(of path: String) throws -> ino_t {
         var info = stat()

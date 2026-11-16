@@ -10,6 +10,10 @@ enum SocketSendError: String, Error {
 
 enum SocketServerState: Equatable {
     case listening
+    /// Opening the socket failed; the server tries again after the delay.
+    case retrying(after: TimeInterval)
+    /// The server cannot start with this setup and does not retry.
+    case failed
     /// Another MacMute already serves the socket; this server leaves it alone.
     case anotherInstanceRunning
 }
@@ -39,6 +43,10 @@ class SocketServer {
     // Only the socket this server bound is unlinked: a refused start must not remove whatever sits at
     // socketPath (e.g. behind a symlinked directory), nor a file that replaced the socket later.
     private var boundFile: (device: dev_t, inode: ino_t)?
+    private var isRunning = false
+    private var retryBackoff: RetryBackoff
+    private var pendingRetry: DispatchWorkItem?
+    private var failuresInARow = 0
     private var listenSource: DispatchSourceRead?
     private var clients: [ClientID: Client] = [:]
     private var nextClientID: ClientID = 1
@@ -84,9 +92,15 @@ class SocketServer {
         }
     }
 
-    init(socketPath: String, maxClients: Int = SocketServer.defaultMaxClients, makeVerifyPeer: @escaping MakeVerifyPeer) {
+    init(
+        socketPath: String,
+        maxClients: Int = SocketServer.defaultMaxClients,
+        retryBackoff: RetryBackoff = RetryBackoff(),
+        makeVerifyPeer: @escaping MakeVerifyPeer
+    ) {
         self.socketPath = socketPath
         self.maxClients = maxClients
+        self.retryBackoff = retryBackoff
         self.makeVerifyPeer = makeVerifyPeer
     }
 
@@ -145,7 +159,11 @@ class SocketServer {
 
     func start() {
         queue.async { [weak self] in
-            self?.startServer()
+            guard let self, !self.isRunning else { return }
+            self.isRunning = true
+            self.retryBackoff.reset()
+            self.failuresInARow = 0
+            self.startServer()
         }
     }
 
@@ -154,6 +172,9 @@ class SocketServer {
     func stop() {
         dispatchPrecondition(condition: .notOnQueue(queue))
         queue.sync {
+            isRunning = false
+            pendingRetry?.cancel()
+            pendingRetry = nil
             listenSource?.cancel()
             listenSource = nil
             clients.values.forEach { $0.readSource.cancel() }
@@ -226,6 +247,7 @@ class SocketServer {
             address = built
         case let .failure(error):
             logger.fault("Not starting the socket server: \(error.description, privacy: .public)")
+            report(.failed)
             return
         }
         let directory = URL(fileURLWithPath: socketPath).deletingLastPathComponent()
@@ -233,6 +255,7 @@ class SocketServer {
             try Self.prepareDirectory(directory)
         } catch {
             logger.fault("Not starting the socket server: unsafe socket directory \(directory.lastPathComponent, privacy: .public): \(String(describing: error), privacy: .public)")
+            report(.failed)
             return
         }
         switch makeVerifyPeer() {
@@ -240,12 +263,13 @@ class SocketServer {
             verifyPeer = verify
         case let .failure(error):
             logger.fault("Not starting the socket server: \(error.description, privacy: .public)")
+            report(.failed)
             return
         }
 
         serverSocket = socket(AF_UNIX, SOCK_STREAM, 0)
         guard serverSocket >= 0 else {
-            logger.error("Failed to create socket: \(String(cString: strerror(errno)), privacy: .public)")
+            failTransiently("Failed to create socket: \(String(cString: strerror(errno)))")
             return
         }
 
@@ -263,27 +287,23 @@ class SocketServer {
         }
 
         guard bindResult == 0 else {
-            logger.error("Failed to bind socket \(self.socketName, privacy: .public): \(String(cString: strerror(errno)), privacy: .public)")
-            abortStart()
+            failTransiently("Failed to bind socket \(self.socketName): \(String(cString: strerror(errno)))")
             return
         }
         var info = stat()
         guard lstat(socketPath, &info) == 0 else {
-            logger.error("Failed to stat socket \(self.socketName, privacy: .public): \(String(cString: strerror(errno)), privacy: .public)")
-            abortStart()
+            failTransiently("Failed to stat socket \(self.socketName): \(String(cString: strerror(errno)))")
             return
         }
         boundFile = (info.st_dev, info.st_ino)
 
         guard chmod(socketPath, 0o600) == 0 else {
-            logger.error("Failed to restrict socket \(self.socketName, privacy: .public) to the owner: \(String(cString: strerror(errno)), privacy: .public)")
-            abortStart()
+            failTransiently("Failed to restrict socket \(self.socketName) to the owner: \(String(cString: strerror(errno)))")
             return
         }
 
         guard listen(serverSocket, Self.listenBacklog) == 0 else {
-            logger.error("Failed to listen on socket: \(String(cString: strerror(errno)), privacy: .public)")
-            abortStart()
+            failTransiently("Failed to listen on socket: \(String(cString: strerror(errno)))")
             return
         }
 
@@ -327,6 +347,23 @@ class SocketServer {
         DispatchQueue.main.async { [weak self] in
             self?.onStateChange?(state)
         }
+    }
+
+    private func failTransiently(_ message: String) {
+        // Repeats every 30 s at most, so only the first failure in a row is logged as an error.
+        let level: OSLogType = failuresInARow == 0 ? .error : .debug
+        logger.log(level: level, "\(message, privacy: .public)")
+        abortStart()
+        let delay = retryBackoff.nextDelay()
+        failuresInARow += 1
+        let retry = DispatchWorkItem { [weak self] in
+            guard let self, self.isRunning else { return }
+            self.pendingRetry = nil
+            self.startServer()
+        }
+        pendingRetry = retry
+        queue.asyncAfter(deadline: .now() + delay, execute: retry)
+        report(.retrying(after: delay))
     }
 
     private func abortStart() {
