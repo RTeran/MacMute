@@ -32,6 +32,8 @@ class MuteStateManager: ObservableObject {
     private static let unconfirmedColor = NSColor.systemOrange.withAlphaComponent(0.85)
 
     private let socketServer = SocketServer()
+    // Most recently active helper last. Until profiles are routed by call status, toggles go to it.
+    private var helpersByActivity: [ClientID] = []
     private let overlayManager = MenuBarOverlayManager()
     private let shortcutManager = GlobalShortcutManager.shared
     private let logger = Logger(subsystem: "com.macmute.app", category: "toggle")
@@ -44,7 +46,10 @@ class MuteStateManager: ObservableObject {
             },
             send: { [weak self] target, requestId, completion in
                 guard let self = self else { return completion(.failed(reason: "app_shutting_down")) }
-                self.socketServer.sendMessage(["type": target.commandType, "requestId": requestId]) { result in
+                guard let helper = self.helpersByActivity.last else {
+                    return completion(.failed(reason: SocketSendError.noSocketClient.rawValue))
+                }
+                self.socketServer.sendMessage(["type": target.commandType, "requestId": requestId], to: helper) { result in
                     switch result {
                     case .success: completion(.sent)
                     case let .failure(error): completion(.failed(reason: error.rawValue))
@@ -70,13 +75,18 @@ class MuteStateManager: ObservableObject {
 
     func start() {
         // Setup socket server
-        socketServer.onMessageReceived = { [weak self] message in
+        socketServer.onMessageReceived = { [weak self] helper, message in
+            self?.markActive(helper)
             self?.handleMessage(message)
         }
-        socketServer.onClientConnected = { [weak self] in
-            self?.logger.notice("Helper connected, requesting mic and camera state")
-            self?.requestState()
-            self?.requestCameraState()
+        socketServer.onClientConnected = { [weak self] helper in
+            self?.logger.notice("Helper \(helper, privacy: .public) connected, requesting mic and camera state")
+            self?.markActive(helper)
+            self?.requestState(from: helper)
+            self?.requestCameraState(from: helper)
+        }
+        socketServer.onClientDisconnected = { [weak self] helper in
+            self?.helpersByActivity.removeAll { $0 == helper }
         }
         socketServer.start()
 
@@ -104,12 +114,17 @@ class MuteStateManager: ObservableObject {
         toggleConfirmation.toggle(.camera)
     }
 
-    func requestState() {
-        socketServer.sendMessage(["type": "get_state"])
+    private func markActive(_ helper: ClientID) {
+        helpersByActivity.removeAll { $0 == helper }
+        helpersByActivity.append(helper)
     }
 
-    func requestCameraState() {
-        socketServer.sendMessage(["type": "get_camera_state"])
+    private func requestState(from helper: ClientID) {
+        socketServer.sendMessage(["type": "get_state"], to: helper)
+    }
+
+    private func requestCameraState(from helper: ClientID) {
+        socketServer.sendMessage(["type": "get_camera_state"], to: helper)
     }
 
     private func handleMessage(_ message: [String: Any]) {

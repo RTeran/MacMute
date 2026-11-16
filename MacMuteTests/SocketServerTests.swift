@@ -5,15 +5,15 @@ final class SocketServerTests: XCTestCase {
     private var server: SocketServer!
     private var clients: [Int32] = []
     private var connections: [XCTestExpectation] = []
+    private var connectedIDs: [ClientID] = []
+    private var disconnections: [ClientID: XCTestExpectation] = [:]
+    private var received: [(ClientID, [String: Any])] = []
+    private var messageArrived: XCTestExpectation?
 
     override func setUp() {
         super.setUp()
         socketPath = NSTemporaryDirectory() + "mm-\(UUID().uuidString.prefix(8)).sock"
-        server = SocketServer(socketPath: socketPath)
-        server.onClientConnected = { [weak self] in
-            self?.connections.removeFirst().fulfill()
-        }
-        server.start()
+        startServer()
     }
 
     override func tearDown() {
@@ -23,56 +23,101 @@ final class SocketServerTests: XCTestCase {
         super.tearDown()
     }
 
-    func testKeepsTheNewestHelperWhenASecondOneConnects() {
-        let first = connectHelper()
-        let second = connectHelper()
+    private func startServer(maxClients: Int = SocketServer.defaultMaxClients) {
+        server = SocketServer(socketPath: socketPath, maxClients: maxClients)
+        server.onClientConnected = { [weak self] id in
+            self?.connectedIDs.append(id)
+            self?.connections.removeFirst().fulfill()
+        }
+        server.onClientDisconnected = { [weak self] id in
+            self?.disconnections.removeValue(forKey: id)?.fulfill()
+        }
+        server.onMessageReceived = { [weak self] id, message in
+            self?.received.append((id, message))
+            self?.messageArrived?.fulfill()
+        }
+        server.start()
+    }
 
-        XCTAssertEqual(send(["type": "ping"]), "sent")
+    func testKeepsBothHelpersAndSendsEachMessageOnlyToItsRecipient() {
+        let (first, firstID) = connectHelper()
+        let (second, secondID) = connectHelper()
+
+        XCTAssertEqual(send(["type": "to-first"], to: firstID), "sent")
+        XCTAssertEqual(send(["type": "to-second"], to: secondID), "sent")
+
+        XCTAssertEqual(readLine(from: first), #"{"type":"to-first"}"#)
+        XCTAssertEqual(readLine(from: second), #"{"type":"to-second"}"#)
+        XCTAssertNotEqual(firstID, secondID)
+    }
+
+    func testOneHelperDroppingDoesNotAffectTheOther() {
+        let (first, firstID) = connectHelper()
+        let (second, secondID) = connectHelper()
+
+        drop(first, id: firstID)
+
+        XCTAssertEqual(send(["type": "ping"], to: firstID), "no_socket_client")
+        XCTAssertEqual(send(["type": "ping"], to: secondID), "sent")
         XCTAssertEqual(readLine(from: second), #"{"type":"ping"}"#)
-        XCTAssertEqual(readLine(from: first), nil)
+    }
+
+    func testReportsWhichHelperSentAMessage() {
+        _ = connectHelper()
+        let (second, secondID) = connectHelper()
+        messageArrived = expectation(description: "message received")
+
+        writeLine(#"{"type":"state_update","muted":true}"#, to: second)
+        wait(for: [messageArrived!], timeout: 2)
+
+        XCTAssertEqual(received.first?.0, secondID)
+        XCTAssertEqual(received.first?.1["muted"] as? Bool, true)
     }
 
     func testAcceptsAHelperAgainAfterThePreviousOneDropped() {
-        let first = connectHelper()
-        XCTAssertEqual(send(["type": "ping"]), "sent")
-        XCTAssertEqual(readLine(from: first), #"{"type":"ping"}"#)
-        close(first)
-        clients.removeAll { $0 == first }
-        waitUntilNoHelperIsConnected()
+        let (first, firstID) = connectHelper()
+        drop(first, id: firstID)
 
-        let second = connectHelper()
+        let (second, secondID) = connectHelper()
 
-        XCTAssertEqual(send(["type": "pong"]), "sent")
+        XCTAssertEqual(send(["type": "pong"], to: secondID), "sent")
         XCTAssertEqual(readLine(from: second), #"{"type":"pong"}"#)
     }
 
+    func testClosesHelpersBeyondTheLimitAndKeepsTheOthers() {
+        server.stop()
+        startServer(maxClients: 1)
+        let (first, firstID) = connectHelper()
+
+        let extra = rawConnect()
+
+        XCTAssertTrue(waitForEndOfStream(on: extra))
+        XCTAssertEqual(send(["type": "ping"], to: firstID), "sent")
+        XCTAssertEqual(readLine(from: first), #"{"type":"ping"}"#)
+    }
+
     func testDisconnectsAHelperThatSendsALineLongerThanTheLimit() {
-        let helper = connectHelper()
-        var noSigPipe: Int32 = 1
-        setsockopt(helper, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+        let (helper, id) = connectHelper()
+        let disconnected = expectDisconnection(of: id)
 
         let oversized = [UInt8](repeating: UInt8(ascii: "a"), count: LineFramer.defaultMaxLineLength + 1)
         _ = oversized.withUnsafeBytes { Darwin.write(helper, $0.baseAddress, $0.count) }
 
         XCTAssertTrue(waitForEndOfStream(on: helper))
-        waitUntilNoHelperIsConnected()
+        wait(for: [disconnected], timeout: 2)
     }
 
-    private func waitForEndOfStream(on fd: Int32) -> Bool {
-        let deadline = Date().addingTimeInterval(2)
-        var buffer = [UInt8](repeating: 0, count: 1024)
-        while Date() < deadline {
-            let count = read(fd, &buffer, buffer.count)
-            if count == 0 { return true }
-            if count < 0 && errno != EAGAIN && errno != EINTR { return true }
-        }
-        return false
-    }
+    // MARK: - Helpers
 
-    private func connectHelper(file: StaticString = #filePath, line: UInt = #line) -> Int32 {
+    private func connectHelper(file: StaticString = #filePath, line: UInt = #line) -> (Int32, ClientID) {
         let connected = expectation(description: "helper connected")
         connections.append(connected)
+        let fd = rawConnect(file: file, line: line)
+        wait(for: [connected], timeout: 2)
+        return (fd, connectedIDs.last ?? -1)
+    }
 
+    private func rawConnect(file: StaticString = #filePath, line: UInt = #line) -> Int32 {
         let deadline = Date().addingTimeInterval(2)
         var fd: Int32 = -1
         while Date() < deadline {
@@ -86,27 +131,31 @@ final class SocketServerTests: XCTestCase {
             XCTFail("Could not connect to \(socketPath!)", file: file, line: line)
             return -1
         }
-
         var timeout = timeval(tv_sec: 0, tv_usec: 300_000)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        var noSigPipe: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
         clients.append(fd)
-        wait(for: [connected], timeout: 2)
         return fd
     }
 
-    private func waitUntilNoHelperIsConnected(file: StaticString = #filePath, line: UInt = #line) {
-        let deadline = Date().addingTimeInterval(2)
-        while Date() < deadline {
-            if send(["type": "probe"]) == "no_socket_client" { return }
-            usleep(10_000)
-        }
-        XCTFail("The server never noticed the helper dropped", file: file, line: line)
+    private func expectDisconnection(of id: ClientID) -> XCTestExpectation {
+        let disconnected = expectation(description: "helper \(id) disconnected")
+        disconnections[id] = disconnected
+        return disconnected
     }
 
-    private func send(_ message: [String: Any]) -> String? {
+    private func drop(_ fd: Int32, id: ClientID) {
+        let disconnected = expectDisconnection(of: id)
+        close(fd)
+        clients.removeAll { $0 == fd }
+        wait(for: [disconnected], timeout: 2)
+    }
+
+    private func send(_ message: [String: Any], to client: ClientID) -> String? {
         let sent = expectation(description: "message sent")
         var outcome: String?
-        server.sendMessage(message) { result in
+        server.sendMessage(message, to: client) { result in
             switch result {
             case .success: outcome = "sent"
             case let .failure(error): outcome = error.rawValue
@@ -117,12 +166,28 @@ final class SocketServerTests: XCTestCase {
         return outcome
     }
 
+    private func writeLine(_ line: String, to fd: Int32) {
+        let bytes = Array((line + "\n").utf8)
+        _ = bytes.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
+    }
+
     private func readLine(from fd: Int32) -> String? {
         var buffer = [UInt8](repeating: 0, count: 1024)
         let count = read(fd, &buffer, buffer.count)
         guard count > 0 else { return nil }
         return String(decoding: buffer[0..<count], as: UTF8.self)
             .trimmingCharacters(in: .newlines)
+    }
+
+    private func waitForEndOfStream(on fd: Int32) -> Bool {
+        let deadline = Date().addingTimeInterval(2)
+        var buffer = [UInt8](repeating: 0, count: 1024)
+        while Date() < deadline {
+            let count = read(fd, &buffer, buffer.count)
+            if count == 0 { return true }
+            if count < 0 && errno != EAGAIN && errno != EINTR { return true }
+        }
+        return false
     }
 
     private func connectUnix(_ fd: Int32, to path: String) -> Int32 {

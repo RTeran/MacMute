@@ -7,17 +7,31 @@ enum SocketSendError: String, Error {
     case writeFailed = "write_failed"
 }
 
+/// Identifies one connected helper, one per Chrome profile. Never reused while the server runs.
+typealias ClientID = Int
+
 class SocketServer {
+    static let defaultMaxClients = 16
+    private static let listenBacklog: Int32 = 8
+
+    private struct Client {
+        let fd: Int32
+        let readSource: DispatchSourceRead
+    }
+
     private let socketPath: String
+    private let maxClients: Int
     private var serverSocket: Int32 = -1
-    private var clientSocket: Int32 = -1
     private var listenSource: DispatchSourceRead?
-    private var readSource: DispatchSourceRead?
+    private var clients: [ClientID: Client] = [:]
+    private var nextClientID: ClientID = 1
     private let queue = DispatchQueue(label: "com.macmute.socket", qos: .userInteractive)
     private let logger = Logger(subsystem: "com.macmute.app", category: "socket")
 
-    var onMessageReceived: (([String: Any]) -> Void)?
-    var onClientConnected: (() -> Void)?
+    /// Callbacks run on the main queue.
+    var onMessageReceived: ((ClientID, [String: Any]) -> Void)?
+    var onClientConnected: ((ClientID) -> Void)?
+    var onClientDisconnected: ((ClientID) -> Void)?
 
     convenience init() {
         let appSupport = FileManager.default.homeDirectoryForCurrentUser
@@ -26,8 +40,9 @@ class SocketServer {
         self.init(socketPath: appSupport.appendingPathComponent("macmute.sock").path)
     }
 
-    init(socketPath: String) {
+    init(socketPath: String, maxClients: Int = SocketServer.defaultMaxClients) {
         self.socketPath = socketPath
+        self.maxClients = maxClients
     }
 
     // The full path contains the user name.
@@ -46,27 +61,30 @@ class SocketServer {
         queue.sync {
             listenSource?.cancel()
             listenSource = nil
-            readSource?.cancel()
-            readSource = nil
+            clients.values.forEach { $0.readSource.cancel() }
+            clients.removeAll()
             serverSocket = -1
-            clientSocket = -1
         }
         unlink(socketPath)
     }
 
     /// `completion` runs on the main queue.
-    func sendMessage(_ message: [String: Any], completion: ((Result<Void, SocketSendError>) -> Void)? = nil) {
+    func sendMessage(
+        _ message: [String: Any],
+        to client: ClientID,
+        completion: ((Result<Void, SocketSendError>) -> Void)? = nil
+    ) {
         queue.async { [weak self] in
-            let result = self?.write(message) ?? .failure(.noSocketClient)
+            let result = self?.write(message, to: client) ?? .failure(.noSocketClient)
             if let completion = completion {
                 DispatchQueue.main.async { completion(result) }
             }
         }
     }
 
-    private func write(_ message: [String: Any]) -> Result<Void, SocketSendError> {
-        guard clientSocket >= 0 else {
-            logger.error("No helper connected, cannot send \(String(describing: message), privacy: .public)")
+    private func write(_ message: [String: Any], to clientID: ClientID) -> Result<Void, SocketSendError> {
+        guard let clientSocket = clients[clientID]?.fd else {
+            logger.error("Helper \(clientID, privacy: .public) not connected, cannot send \(String(describing: message), privacy: .public)")
             return .failure(.noSocketClient)
         }
 
@@ -96,10 +114,10 @@ class SocketServer {
         }
         guard written == total else {
             let cause = writeErrno.map { String(cString: strerror($0)) } ?? "no buffer"
-            logger.error("Failed to write to helper (\(written, privacy: .public)/\(total, privacy: .public) bytes): \(cause, privacy: .public)")
+            logger.error("Failed to write to helper \(clientID, privacy: .public) (\(written, privacy: .public)/\(total, privacy: .public) bytes): \(cause, privacy: .public)")
             return .failure(.writeFailed)
         }
-        logger.info("Sent to helper: \(String(describing: message), privacy: .public)")
+        logger.info("Sent to helper \(clientID, privacy: .public): \(String(describing: message), privacy: .public)")
         return .success(())
     }
 
@@ -134,7 +152,7 @@ class SocketServer {
             return
         }
 
-        guard listen(serverSocket, 1) == 0 else {
+        guard listen(serverSocket, Self.listenBacklog) == 0 else {
             logger.error("Failed to listen on socket: \(String(cString: strerror(errno)), privacy: .public)")
             close(serverSocket)
             return
@@ -161,9 +179,10 @@ class SocketServer {
             return
         }
 
-        if clientSocket >= 0 {
-            logger.notice("Replacing the connected helper with a new one")
-            readSource?.cancel()
+        guard clients.count < maxClients else {
+            logger.error("Rejecting helper: already \(self.maxClients, privacy: .public) connected")
+            close(client)
+            return
         }
 
         // Without this, writing to a helper that just died raises SIGPIPE and kills the app.
@@ -172,30 +191,29 @@ class SocketServer {
             logger.error("Failed to set SO_NOSIGPIPE: \(String(cString: strerror(errno)), privacy: .public)")
         }
 
-        clientSocket = client
-        logger.notice("Helper connected")
-
-        startReading()
+        let id = nextClientID
+        nextClientID += 1
+        clients[id] = Client(fd: client, readSource: makeReadSource(for: client, id: id))
+        logger.notice("Helper \(id, privacy: .public) connected (\(self.clients.count, privacy: .public) total)")
 
         DispatchQueue.main.async { [weak self] in
-            self?.onClientConnected?()
+            self?.onClientConnected?(id)
         }
     }
 
-    private func startReading() {
-        let client = clientSocket
+    private func makeReadSource(for client: Int32, id: ClientID) -> DispatchSourceRead {
         let source = DispatchSource.makeReadSource(fileDescriptor: client, queue: queue)
         var framer = LineFramer()
 
-        source.setEventHandler { [weak self, unowned source] in
+        source.setEventHandler { [weak self] in
             guard let self = self else { return }
             var readBuffer = [UInt8](repeating: 0, count: 4096)
             let bytesRead = read(client, &readBuffer, readBuffer.count)
 
             if bytesRead <= 0 {
                 let cause = bytesRead < 0 ? String(cString: strerror(errno)) : "end of stream"
-                self.logger.notice("Helper disconnected (\(cause, privacy: .public))")
-                self.dropClient(client, source: source)
+                self.logger.notice("Helper \(id, privacy: .public) disconnected (\(cause, privacy: .public))")
+                self.dropClient(id)
                 return
             }
 
@@ -203,18 +221,18 @@ class SocketServer {
             do {
                 lines = try framer.append(Data(readBuffer[0..<bytesRead]))
             } catch {
-                self.logger.error("Disconnecting helper: line longer than \(framer.maxLineLength, privacy: .public) bytes")
-                self.dropClient(client, source: source)
+                self.logger.error("Disconnecting helper \(id, privacy: .public): line longer than \(framer.maxLineLength, privacy: .public) bytes")
+                self.dropClient(id)
                 return
             }
 
             for messageData in lines {
                 guard let json = try? JSONSerialization.jsonObject(with: messageData) as? [String: Any] else {
-                    self.logger.error("Dropping undecodable message from helper: \(String(decoding: messageData, as: UTF8.self), privacy: .public)")
+                    self.logger.error("Dropping undecodable message from helper \(id, privacy: .public): \(String(decoding: messageData, as: UTF8.self), privacy: .public)")
                     continue
                 }
                 DispatchQueue.main.async {
-                    self.onMessageReceived?(json)
+                    self.onMessageReceived?(id, json)
                 }
             }
         }
@@ -224,14 +242,14 @@ class SocketServer {
         }
 
         source.resume()
-        self.readSource = source
+        return source
     }
 
-    private func dropClient(_ client: Int32, source: DispatchSourceRead) {
-        source.cancel()
-        if clientSocket == client {
-            clientSocket = -1
-            readSource = nil
+    private func dropClient(_ id: ClientID) {
+        guard let client = clients.removeValue(forKey: id) else { return }
+        client.readSource.cancel()
+        DispatchQueue.main.async { [weak self] in
+            self?.onClientDisconnected?(id)
         }
     }
 }
