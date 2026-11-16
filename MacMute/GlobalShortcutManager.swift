@@ -8,6 +8,7 @@ struct Shortcut: Equatable {
 
 enum ShortcutMatch: Equatable {
     case triggered(ToggleTarget)
+    case repeated(ToggleTarget)
     case modifiersMismatch(ToggleTarget)
     case none
 }
@@ -18,14 +19,14 @@ struct ShortcutMatcher {
     var mic: Shortcut?
     var camera: Shortcut?
 
-    func match(keyCode: UInt16, flags: CGEventFlags) -> ShortcutMatch {
+    func match(keyCode: UInt16, flags: CGEventFlags, isAutorepeat: Bool = false) -> ShortcutMatch {
         let pressed = flags.intersection(Self.relevantModifiers)
         let configured = [(ToggleTarget.mic, mic), (.camera, camera)]
             .compactMap { target, shortcut in shortcut.map { (target, $0) } }
             .filter { $0.1.keyCode == keyCode }
 
         if let (target, _) = configured.first(where: { $0.1.modifiers.intersection(Self.relevantModifiers) == pressed }) {
-            return .triggered(target)
+            return isAutorepeat ? .repeated(target) : .triggered(target)
         }
         if let (target, _) = configured.first {
             return .modifiersMismatch(target)
@@ -187,7 +188,8 @@ class GlobalShortcutManager {
         }
 
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
-        switch matcher.match(keyCode: keyCode, flags: event.flags) {
+        let isAutorepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+        switch matcher.match(keyCode: keyCode, flags: event.flags, isAutorepeat: isAutorepeat) {
         case let .triggered(target):
             logger.notice("\(target.rawValue, privacy: .public) shortcut pressed")
             DispatchQueue.main.async { [weak self] in
@@ -197,6 +199,8 @@ class GlobalShortcutManager {
                 }
             }
             return nil // Consume the event
+        case .repeated:
+            return nil
         case let .modifiersMismatch(target):
             logger.debug("\(target.rawValue, privacy: .public) shortcut key pressed with modifiers \(Self.describe(event.flags.intersection(ShortcutMatcher.relevantModifiers)), privacy: .public), not matching")
             return Unmanaged.passRetained(event)

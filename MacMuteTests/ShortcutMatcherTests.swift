@@ -44,6 +44,21 @@ final class ShortcutMatcherTests: XCTestCase {
 
         XCTAssertEqual(micOnly.match(keyCode: cameraKey, flags: [.maskControl]), .none)
     }
+
+    func testSwallowsAutorepeatOfAMatchingShortcutWithoutTriggering() {
+        XCTAssertEqual(
+            matcher.match(keyCode: micKey, flags: [.maskCommand, .maskShift], isAutorepeat: true),
+            .repeated(.mic)
+        )
+    }
+
+    func testLetsAutorepeatOfOtherKeysThrough() {
+        XCTAssertEqual(matcher.match(keyCode: 0, flags: [], isAutorepeat: true), .none)
+        XCTAssertEqual(
+            matcher.match(keyCode: micKey, flags: [.maskCommand], isAutorepeat: true),
+            .modifiersMismatch(.mic)
+        )
+    }
 }
 
 final class ShortcutStoreTests: XCTestCase {
