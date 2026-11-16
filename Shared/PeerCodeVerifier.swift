@@ -18,7 +18,8 @@ enum PeerVerificationError: Error, Equatable, CustomStringConvertible {
         case let .ownSignatureInvalid(status):
             return "this app's running code does not match a valid signature on disk (OSStatus \(status))"
         case let .expectedCodeUnavailable(path, status):
-            return "cannot read the signature of \(path) (OSStatus \(status))"
+            // Logged publicly, and the full path contains the user name.
+            return "cannot read the signature of \((path as NSString).lastPathComponent) (OSStatus \(status))"
         case let .requirementUnbuildable(status):
             return "cannot build the trusted helper requirement (OSStatus \(status))"
         case let .peerTokenUnavailable(errno):

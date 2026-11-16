@@ -123,6 +123,13 @@ final class PeerCodeVerifierTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(path) as URL, try ownCodeURL())
     }
 
+    func testDescribesAnUnreadableHelperWithoutItsDirectory() {
+        let error = PeerVerificationError.expectedCodeUnavailable(path: "/Users/someone/MacMute.app/Contents/Resources/MacMuteHelper", status: -1)
+
+        XCTAssertTrue(error.description.contains("MacMuteHelper"), error.description)
+        XCTAssertFalse(error.description.contains("someone"), error.description)
+    }
+
     func testReportsThePeerProcessId() {
         XCTAssertEqual(PeerCodeVerifier.peerProcessID(of: sockets[0]), getpid())
     }
