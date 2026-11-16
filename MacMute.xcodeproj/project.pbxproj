@@ -32,6 +32,9 @@
 		A1000070 /* LineFramer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000070 /* LineFramer.swift */; };
 		A1000071 /* LineFramer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000070 /* LineFramer.swift */; };
 		A1000072 /* LineFramerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000071 /* LineFramerTests.swift */; };
+		A1000080 /* CallRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000080 /* CallRouter.swift */; };
+		A1000081 /* CallRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000080 /* CallRouter.swift */; };
+		A1000082 /* CallRouterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000081 /* CallRouterTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -82,6 +85,8 @@
 		A2000054 /* UnconfirmedFeedbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnconfirmedFeedbackTests.swift; sourceTree = "<group>"; };
 		A2000070 /* LineFramer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineFramer.swift; sourceTree = "<group>"; };
 		A2000071 /* LineFramerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineFramerTests.swift; sourceTree = "<group>"; };
+		A2000080 /* CallRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallRouter.swift; sourceTree = "<group>"; };
+		A2000081 /* CallRouterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallRouterTests.swift; sourceTree = "<group>"; };
 		A3000030 /* MacMuteTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MacMuteTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -134,6 +139,7 @@
 				A2000008 /* MuteStateManager.swift */,
 				A2000012 /* ToggleConfirmation.swift */,
 				A2000053 /* UnconfirmedFeedback.swift */,
+				A2000080 /* CallRouter.swift */,
 				A2000011 /* main.swift */,
 				A2000009 /* Info.plist */,
 				A2000010 /* MacMute.entitlements */,
@@ -176,6 +182,7 @@
 				A2000052 /* ShortcutMatcherTests.swift */,
 				A2000054 /* UnconfirmedFeedbackTests.swift */,
 				A2000071 /* LineFramerTests.swift */,
+				A2000081 /* CallRouterTests.swift */,
 			);
 			path = MacMuteTests;
 			sourceTree = "<group>";
@@ -280,6 +287,7 @@
 				A1000010 /* ToggleConfirmation.swift in Sources */,
 				A1000056 /* UnconfirmedFeedback.swift in Sources */,
 				A1000070 /* LineFramer.swift in Sources */,
+				A1000080 /* CallRouter.swift in Sources */,
 				A1000009 /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -306,6 +314,8 @@
 				A1000058 /* UnconfirmedFeedbackTests.swift in Sources */,
 				A1000071 /* LineFramer.swift in Sources */,
 				A1000072 /* LineFramerTests.swift in Sources */,
+				A1000081 /* CallRouter.swift in Sources */,
+				A1000082 /* CallRouterTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
