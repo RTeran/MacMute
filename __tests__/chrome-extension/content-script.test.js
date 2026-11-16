@@ -1025,6 +1025,27 @@ describe("re-injection guard (window.__macMuteLoaded)", () => {
       expect(chrome.runtime.onMessage.removeListener).toHaveBeenCalledWith(messageHandler);
     }));
 
+  test("an instance whose message to the extension throws tears itself down", () =>
+    withSharedObserverPaused(async () => {
+      jest.useFakeTimers();
+      const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+      window.__macMuteLoaded = orphan();
+      document.body.innerHTML = '<button data-is-muted="false"></button>';
+      const { instance } = loadFreshInstance();
+      const messageHandler = chrome.runtime.onMessage.addListener.mock.calls[0][0];
+      chrome.runtime.sendMessage.mockImplementationOnce(() => {
+        throw new Error("Extension context invalidated.");
+      });
+
+      document.querySelector("[data-is-muted]").setAttribute("data-is-muted", "true");
+      await Promise.resolve();
+      jest.advanceTimersByTime(instance.STATE_REPORT_DELAY_MS);
+
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("state_update"), "Extension context invalidated.");
+      expect(chrome.runtime.onMessage.removeListener).toHaveBeenCalledWith(messageHandler);
+      warn.mockRestore();
+    }));
+
   test("a new injection still starts when tearing down the old instance fails", () => {
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
     window.__macMuteLoaded = {
@@ -1676,6 +1697,8 @@ describe("call presence", () => {
   });
 
   afterEach(() => {
+    jest.runOnlyPendingTimers();
+    showPage();
     jest.useRealTimers();
   });
 
@@ -1685,6 +1708,24 @@ describe("call presence", () => {
 
   function callLeftMessages() {
     return sentMessages().filter((message) => message.type === "call_left");
+  }
+
+  function setVisibility(state) {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+  }
+
+  function showPage() {
+    setVisibility("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+  }
+
+  function postMediaSession(kind, active) {
+    window.dispatchEvent(new MessageEvent("message", { data: { type: "macmute:media-session", kind, active }, source: window }));
+  }
+
+  async function leaveCall() {
+    await replacePage("<div>You left the meeting</div>");
+    jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS);
   }
 
   async function replacePage(html) {
@@ -1759,25 +1800,145 @@ describe("call presence", () => {
   });
 
   test("does not judge the next call by a media session state from the previous one", async () => {
-    const setVisibility = (state) =>
-      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+    postMediaSession("mic", true);
+    await leaveCall();
     setVisibility("hidden");
-    try {
-      document.body.innerHTML = MIC_ON + CAMERA_ON;
-      script.startObserving();
-      window.dispatchEvent(
-        new MessageEvent("message", { data: { type: "macmute:media-session", kind: "mic", active: true }, source: window })
-      );
-      await replacePage("<div>You left the meeting</div>");
+    chrome.runtime.sendMessage.mockClear();
+
+    await replacePage(MIC_MUTED + CAMERA_ON);
+
+    expect(sentMessages()).toContainEqual({ type: "state_update", muted: true });
+  });
+
+  test("does not report a late media session change from a toggle of the previous call", async () => {
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+    script.toggleMute();
+    jest.advanceTimersByTime(script.MIC_STATE_CHANGE_TIMEOUT_MS);
+    await leaveCall();
+    await replacePage(MIC_ON + CAMERA_ON);
+    chrome.runtime.sendMessage.mockClear();
+
+    postMediaSession("mic", false);
+    jest.advanceTimersByTime(script.LATE_MEDIA_SESSION_WINDOW_MS);
+
+    expect(sentMessages()).toEqual([]);
+  });
+
+  test("does not start a toggle right after rejoining from the previous call's state", async () => {
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+    postMediaSession("mic", false);
+    await leaveCall();
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+
+    const pending = script.toggleMute();
+    postMediaSession("mic", true);
+    jest.advanceTimersByTime(script.MIC_STATE_CHANGE_TIMEOUT_MS);
+
+    expect(await pending).toEqual(expect.objectContaining({ ok: false, reason: "timeout" }));
+  });
+
+  test("sends call_left again when a rejoined call is left too", async () => {
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+    await leaveCall();
+    await replacePage(MIC_ON + CAMERA_ON);
+    await leaveCall();
+
+    expect(callLeftMessages()).toEqual([{ type: "call_left" }, { type: "call_left" }]);
+  });
+
+  test("sends call_left once while the page keeps changing without call controls", async () => {
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+    await leaveCall();
+
+    for (let i = 0; i < 3; i++) {
+      await replacePage(`<div>Rejoin or return to home screen ${i}</div>`);
       jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS);
-      chrome.runtime.sendMessage.mockClear();
-
-      await replacePage(MIC_MUTED + CAMERA_ON);
-
-      expect(sentMessages()).toContainEqual({ type: "state_update", muted: true });
-    } finally {
-      setVisibility("visible");
     }
+
+    expect(callLeftMessages()).toEqual([{ type: "call_left" }]);
+  });
+
+  test("waits for the tab to be visible before deciding the call was left", async () => {
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+    setVisibility("hidden");
+
+    await replacePage("<div>The call moved to a picture-in-picture window</div>");
+    jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS * 10);
+    expect(callLeftMessages()).toEqual([]);
+
+    showPage();
+    jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS - 1);
+    expect(callLeftMessages()).toEqual([]);
+    jest.advanceTimersByTime(1);
+    expect(callLeftMessages()).toEqual([{ type: "call_left" }]);
+  });
+
+  test("stays in the call when the tab comes back visible with its controls", async () => {
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+    setVisibility("hidden");
+    await replacePage("<div>The call moved to a picture-in-picture window</div>");
+    jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS);
+
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    showPage();
+    jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS * 2);
+
+    expect(callLeftMessages()).toEqual([]);
+  });
+
+  test("stops waiting for a toggle that never ends and sends call_left with a warning", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+    script.toggleCamera(script.CALL_LEFT_GRACE_MS * 100);
+
+    await replacePage("<div>Loading</div>");
+    jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS * script.CALL_LEFT_MAX_TOGGLE_WAITS);
+    expect(callLeftMessages()).toEqual([]);
+
+    jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS);
+    expect(callLeftMessages()).toEqual([{ type: "call_left" }]);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  test("logs a call_left that the extension rejects", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+    chrome.runtime.sendMessage.mockImplementationOnce(() => Promise.reject(new Error("Receiving end does not exist.")));
+
+    await leaveCall();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("call_left"), "Receiving end does not exist.");
+    warn.mockRestore();
+  });
+
+  test.each(["get_state", "get_camera_state"])("still answers %s when reading the page fails", (type) => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const querySelector = jest.spyOn(document, "querySelector").mockImplementation(() => {
+      throw new Error("boom");
+    });
+    const sendResponse = jest.fn();
+
+    try {
+      messageListener({ type }, {}, sendResponse);
+    } finally {
+      querySelector.mockRestore();
+      warn.mockRestore();
+    }
+
+    expect(sendResponse).toHaveBeenCalledWith({ inCall: false, error: true });
   });
 
   test.each(["get_state", "get_camera_state"])("answers %s with whether the tab is in a call", (type) => {
