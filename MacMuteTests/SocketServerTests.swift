@@ -28,6 +28,7 @@ final class SocketServerTests: XCTestCase {
         clients.forEach { close($0) }
         server.stop()
         chflags(socketPath, 0)
+        if FileManager.default.fileExists(atPath: socketDirectory.path) { allowAddingFiles() }
         unlink(socketPath)
         try? FileManager.default.removeItem(at: socketDirectory)
         super.tearDown()
@@ -480,9 +481,9 @@ final class SocketServerTests: XCTestCase {
         _ = connectHelper()
     }
 
-    func testRetriesDoNotLeakDescriptors() throws {
+    func testRetriesAfterAFailedBindDoNotLeakDescriptors() {
         server.stop()
-        try leaveUnremovableStaleSocket()
+        denyAddingFiles()
         let firstRetry = expectState(.retrying(after: 0.02))
         startServer()
         wait(for: [firstRetry], timeout: 2)
@@ -494,6 +495,10 @@ final class SocketServerTests: XCTestCase {
         }
 
         XCTAssertEqual(openServerDescriptors(), afterFirstRetry)
+        let listening = expectState(.listening)
+        allowAddingFiles()
+        wait(for: [listening], timeout: 2)
+        _ = connectHelper()
     }
 
     func testARefusedSecondServerDoesNotLeakDescriptors() {
@@ -740,6 +745,24 @@ final class SocketServerTests: XCTestCase {
             guard fcntl(fd, F_GETPATH, &path) == 0 else { return false }
             return String(cString: path).hasSuffix(lockName)
         }.count
+    }
+
+    /// The lock file already exists, so only bind, which runs after socket(), is denied.
+    private func denyAddingFiles() {
+        runTool("/bin/chmod", ["+a", "everyone deny add_file", socketDirectory.path])
+    }
+
+    private func allowAddingFiles() {
+        runTool("/bin/chmod", ["-N", socketDirectory.path])
+    }
+
+    private func runTool(_ path: String, _ arguments: [String]) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = arguments
+        XCTAssertNoThrow(try process.run())
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0, "\(path) \(arguments)")
     }
 
     private func waitLongerThanARetry() {
