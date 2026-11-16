@@ -18,8 +18,8 @@ enum ToggleTarget: String {
 struct PendingToggleTracker {
     struct Pending: Equatable {
         let requestId: String
-        /// `nil` when the state before the press is unknown: then its own `toggle_result` confirms it
-        /// whatever state it carries.
+        /// `nil` when the state before the press is unknown, or the press it chained on failed: then
+        /// its own `toggle_result` confirms it whatever state it carries.
         let expected: Bool?
         /// The press whose expected state this one undoes, if it chained on one.
         let chainedOn: String?

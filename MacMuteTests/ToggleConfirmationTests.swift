@@ -317,6 +317,16 @@ final class ToggleConfirmationTests: XCTestCase {
         XCTAssertTrue(harness.confirmations.isEmpty)
     }
 
+    func testSuccessWithoutRequestIdDoesNotEndTheWarning() {
+        harness.confirmation.toggle(.mic)
+        harness.confirmationTimer().fire()
+
+        harness.confirm(.mic, nil, newState: true)
+
+        XCTAssertEqual(harness.feedbackEnds, 0)
+        XCTAssertTrue(harness.confirmation.isShowingUnconfirmedFeedback)
+    }
+
     func testSuccessWithoutRequestIdAndUnexpectedStateLeavesTheToggleRunning() {
         harness.confirmation.toggle(.mic)
 
