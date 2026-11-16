@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-IDENTITY="${MACMUTE_SIGNING_IDENTITY:-MacMute Code Signing}"
+IDENTITY="${MACMUTE_SIGNING_IDENTITY:-MacMute Code Signing 2026}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="$ROOT/build"
 DIST="$ROOT/dist"
