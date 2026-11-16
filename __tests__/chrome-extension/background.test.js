@@ -550,3 +550,92 @@ describe("call status", () => {
     expect(postedCallStatus()).toEqual([]);
   });
 });
+
+describe("native host reconnection", () => {
+  const SECOND = 1000;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  const connections = () => chrome.runtime.connectNative.mock.calls.length;
+  const latestPort = () => chrome.runtime.connectNative.mock.results.at(-1).value;
+  const disconnect = (target = latestPort()) => target.onDisconnect.addListener.mock.calls[0][0]();
+  const receive = (target, message) => target.onMessage.addListener.mock.calls[0][0](message);
+
+  function expectReconnectAfter(ms) {
+    const before = connections();
+    jest.advanceTimersByTime(ms - 1);
+    expect(connections()).toBe(before);
+    jest.advanceTimersByTime(1);
+    expect(connections()).toBe(before + 1);
+  }
+
+  test("waits longer after each failed connection: 3, 6, then 12 seconds", () => {
+    disconnect();
+    expectReconnectAfter(3 * SECOND);
+    disconnect();
+    expectReconnectAfter(6 * SECOND);
+    disconnect();
+    expectReconnectAfter(12 * SECOND);
+  });
+
+  test("never waits more than 5 minutes between attempts", () => {
+    for (const seconds of [3, 6, 12, 24, 48, 96, 192]) {
+      disconnect();
+      expectReconnectAfter(seconds * SECOND);
+    }
+    disconnect();
+    expectReconnectAfter(300 * SECOND);
+    disconnect();
+    expectReconnectAfter(300 * SECOND);
+  });
+
+  test("starts again from 3 seconds once the app answered on the connection", () => {
+    disconnect();
+    expectReconnectAfter(3 * SECOND);
+    disconnect();
+    expectReconnectAfter(6 * SECOND);
+
+    receive(latestPort(), { type: "unknown" });
+    disconnect();
+
+    expectReconnectAfter(3 * SECOND);
+  });
+
+  test("schedules one reconnection when a disconnect is reported twice", () => {
+    const first = latestPort();
+    disconnect(first);
+    disconnect(first);
+
+    jest.advanceTimersByTime(3 * SECOND);
+    expect(connections()).toBe(2);
+    jest.advanceTimersByTime(300 * SECOND);
+    expect(connections()).toBe(2);
+  });
+
+  test("ignores a late disconnect from a port it already replaced", async () => {
+    const first = latestPort();
+    disconnect(first);
+    jest.advanceTimersByTime(3 * SECOND);
+    const second = latestPort();
+
+    disconnect(first);
+    jest.advanceTimersByTime(300 * SECOND);
+    await background.handleNativeMessage({ type: "get_state" });
+
+    expect(connections()).toBe(2);
+    expect(second.postMessage).toHaveBeenCalledWith({ type: "call_status", inCall: false });
+  });
+
+  test("backs off when connecting throws", () => {
+    jest.spyOn(console, "error").mockImplementation(() => {});
+    chrome.runtime.connectNative.mockImplementation(() => {
+      throw new Error("Specified native messaging host not found.");
+    });
+
+    disconnect(port);
+    expectReconnectAfter(3 * SECOND);
+    expectReconnectAfter(6 * SECOND);
+  });
+});

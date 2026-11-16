@@ -2,32 +2,48 @@ const NATIVE_HOST = "com.macmute.helper";
 
 let port = null;
 
+// The helper exits at once when the app rejects it, so a fixed short delay would respawn it
+// forever. The delay grows until the app answers on a connection.
+const RECONNECT_INITIAL_DELAY_MS = 3000;
+const RECONNECT_MAX_DELAY_MS = 5 * 60 * 1000;
+let reconnectDelayMs = RECONNECT_INITIAL_DELAY_MS;
+
+// Only the current port's first disconnect or a failed connect gets here, so one timer runs at a time.
+function scheduleReconnect() {
+  const delayMs = reconnectDelayMs;
+  reconnectDelayMs = Math.min(delayMs * 2, RECONNECT_MAX_DELAY_MS);
+  console.log(`MacMute: Reconnecting to the native host in ${delayMs / 1000} s`);
+  setTimeout(connectNative, delayMs);
+}
+
 function connectNative() {
+  let connection;
   try {
-    port = chrome.runtime.connectNative(NATIVE_HOST);
-
-    port.onMessage.addListener((message) => {
-      console.log("MacMute: Received from native host:", message);
-      Promise.resolve(handleNativeMessage(message)).catch((error) => {
-        console.error("MacMute: Failed to handle native message:", message, error);
-      });
-    });
-
-    port.onDisconnect.addListener(() => {
-      console.log(
-        "MacMute: Native host disconnected:",
-        chrome.runtime.lastError?.message
-      );
-      port = null;
-      // Reconnect after a delay
-      setTimeout(connectNative, 3000);
-    });
-
-    console.log("MacMute: Connected to native host");
+    connection = chrome.runtime.connectNative(NATIVE_HOST);
   } catch (error) {
     console.error("MacMute: Failed to connect to native host:", error);
-    setTimeout(connectNative, 5000);
+    scheduleReconnect();
+    return;
   }
+  port = connection;
+
+  connection.onMessage.addListener((message) => {
+    // The helper only relays what the app sends, so any message means the app accepted it.
+    if (connection === port) reconnectDelayMs = RECONNECT_INITIAL_DELAY_MS;
+    console.log("MacMute: Received from native host:", message);
+    Promise.resolve(handleNativeMessage(message)).catch((error) => {
+      console.error("MacMute: Failed to handle native message:", message, error);
+    });
+  });
+
+  connection.onDisconnect.addListener(() => {
+    if (connection !== port) return;
+    console.log("MacMute: Native host disconnected:", chrome.runtime.lastError?.message);
+    port = null;
+    scheduleReconnect();
+  });
+
+  console.log("MacMute: Connected to native host");
 }
 
 const MEET_URL_PREFIX = "https://meet.google.com/";
