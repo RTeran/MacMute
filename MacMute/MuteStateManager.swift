@@ -121,13 +121,13 @@ class MuteStateManager: ObservableObject {
         switch type {
         case "state_update":
             if let muted = message["muted"] as? Bool {
-                toggleConfirmation.handlePassiveUpdate(.mic, newState: muted)
                 updateMicState(muted: muted)
+                toggleConfirmation.handlePassiveUpdate(.mic, newState: muted)
             }
         case "camera_state_update":
             if let active = message["active"] as? Bool {
-                toggleConfirmation.handlePassiveUpdate(.camera, newState: !active)
                 updateCameraState(active: active)
+                toggleConfirmation.handlePassiveUpdate(.camera, newState: !active)
             }
         case "toggle_result":
             handleToggleResult(message)
@@ -145,51 +145,42 @@ class MuteStateManager: ObservableObject {
             logger.error("toggle_result ok without state: \(String(describing: message), privacy: .public)")
         }
 
-        toggleConfirmation.handle(result)
-
-        guard case let .confirmed(newState) = result.outcome else { return }
-        switch result.target {
-        case .mic: updateMicState(muted: newState)
-        case .camera: updateCameraState(active: !newState)
+        // The confirmed state must be current before handle() ends the unconfirmed feedback, which
+        // restores the overlay and the menu bar icon from it.
+        if case let .confirmed(newState) = result.outcome {
+            switch result.target {
+            case .mic: updateMicState(muted: newState)
+            case .camera: updateCameraState(active: !newState)
+            }
         }
+        toggleConfirmation.handle(result)
     }
 
+    // Socket messages are delivered on main (SocketServer), so these run synchronously.
     private func updateMicState(muted: Bool) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.isMuted = muted
-            self.overlayManager.updateOverlay(
-                micMuted: self.isMuted,
-                cameraOff: self.isCameraOff,
-                micColor: NSColor(self.micMutedColor).withAlphaComponent(0.7),
-                cameraColor: NSColor(self.cameraOffColor).withAlphaComponent(0.7)
-            )
-            NotificationCenter.default.post(name: .muteStateDidChange, object: nil)
-        }
+        isMuted = muted
+        pushOverlayState()
+        NotificationCenter.default.post(name: .muteStateDidChange, object: nil)
     }
 
     private func updateCameraState(active: Bool) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.isCameraOff = !active
-            self.overlayManager.updateOverlay(
-                micMuted: self.isMuted,
-                cameraOff: self.isCameraOff,
-                micColor: NSColor(self.micMutedColor).withAlphaComponent(0.7),
-                cameraColor: NSColor(self.cameraOffColor).withAlphaComponent(0.7)
-            )
-            NotificationCenter.default.post(name: .cameraStateDidChange, object: nil)
-        }
+        isCameraOff = !active
+        pushOverlayState()
+        NotificationCenter.default.post(name: .cameraStateDidChange, object: nil)
     }
 
-    private func refreshOverlayIfVisible() {
-        guard isMuted || isCameraOff else { return }
+    private func pushOverlayState() {
         overlayManager.updateOverlay(
             micMuted: isMuted,
             cameraOff: isCameraOff,
             micColor: NSColor(micMutedColor).withAlphaComponent(0.7),
             cameraColor: NSColor(cameraOffColor).withAlphaComponent(0.7)
         )
+    }
+
+    private func refreshOverlayIfVisible() {
+        guard isMuted || isCameraOff else { return }
+        pushOverlayState()
     }
 
     private func saveColor(_ color: Color, forKey key: String) {
