@@ -74,6 +74,8 @@ final class SocketClient {
     var onMessageReceived: (([String: Any]) -> Void)?
     /// Called on the client's queue.
     var onStateChange: ((SocketClientState) -> Void)?
+    /// Called on the client's queue with why a live connection ended.
+    var onDisconnect: ((ConnectionEnd, String) -> Void)?
 
     /// Only talks to the app that bundles this helper; see `PeerCodeVerifier.trustedAppRequirement`.
     convenience init() {
@@ -121,7 +123,7 @@ final class SocketClient {
 
     // A reset or any other error can come from an app that crashed while restarting, so only a
     // clean close can be the app turning this helper away.
-    static func connectionEnd(afterReadReturning result: Int, errno code: Int32) -> ConnectionEnd {
+    static func connectionEnd(afterReadReturning result: Int) -> ConnectionEnd {
         result == 0 ? .closedByApp : .failed
     }
 
@@ -175,7 +177,7 @@ final class SocketClient {
                 self.disconnect(
                     fd, source: source,
                     reason: "write failed after \(written)/\(messageData.count) bytes (\(cause)), dropping \(preview(message))",
-                    level: .error, end: Self.connectionEnd(afterWriteFailingWith: writeErrno)
+                    level: writeErrno == EPIPE ? .default : .error, end: Self.connectionEnd(afterWriteFailingWith: writeErrno)
                 )
             }
         }
@@ -273,7 +275,7 @@ final class SocketClient {
                 let cause = bytesRead < 0 ? String(cString: strerror(code)) : "end of stream"
                 return self.disconnect(
                     fd, source: source, reason: cause, level: bytesRead == 0 ? .default : .error,
-                    end: Self.connectionEnd(afterReadReturning: bytesRead, errno: code)
+                    end: Self.connectionEnd(afterReadReturning: bytesRead)
                 )
             }
             if !self.receivedDataOnConnection {
@@ -315,6 +317,7 @@ final class SocketClient {
     // sending anything means it rejected this helper; retrying forever would only fill both logs.
     private func disconnect(_ fd: Int32, source: DispatchSourceRead, reason: String, level: OSLogType, end: ConnectionEnd) {
         HelperLog.logger.log(level: level, "Disconnected from app (\(reason, privacy: .public))")
+        onDisconnect?(end, reason)
         source.cancel()
         guard socketFD == fd else { return }
         socketFD = -1

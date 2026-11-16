@@ -349,16 +349,22 @@ final class SocketClientTests: XCTestCase {
                 return .success(())
             }
         }, maxConnectionsWithoutData: 1)
+        var disconnects: [(end: SocketClient.ConnectionEnd, reason: String)] = []
+        client.onDisconnect = { end, reason in DispatchQueue.main.async { disconnects.append((end, reason)) } }
         let stopped = expectState(.stopped(.rejectedByApp))
 
         client.start()
 
         wait(for: [stopped], timeout: 2)
+        XCTAssertEqual(disconnects.count, 1)
+        XCTAssertEqual(disconnects.first?.end, .closedByApp)
+        XCTAssertEqual(disconnects.first?.reason.hasPrefix("write failed"), true, disconnects.first?.reason ?? "")
+        XCTAssertEqual(disconnects.first?.reason.contains(#"type:String="state_update""#), true, disconnects.first?.reason ?? "")
     }
 
     func testOnlyACleanCloseByTheAppCanMeanARejection() {
-        XCTAssertEqual(SocketClient.connectionEnd(afterReadReturning: 0, errno: 0), .closedByApp)
-        XCTAssertEqual(SocketClient.connectionEnd(afterReadReturning: -1, errno: ECONNRESET), .failed)
+        XCTAssertEqual(SocketClient.connectionEnd(afterReadReturning: 0), .closedByApp)
+        XCTAssertEqual(SocketClient.connectionEnd(afterReadReturning: -1), .failed)
         XCTAssertEqual(SocketClient.connectionEnd(afterWriteFailingWith: EPIPE), .closedByApp)
         XCTAssertEqual(SocketClient.connectionEnd(afterWriteFailingWith: ECONNRESET), .failed)
         XCTAssertEqual(SocketClient.connectionEnd(afterWriteFailingWith: EAGAIN), .failed)
@@ -471,7 +477,7 @@ final class SocketClientTests: XCTestCase {
         }
     }
 
-    func testAnAdHocHelperInsideAnAppTrustsThatApp() throws {
+    func testAnAdHocHelperBuildsItsRequirementFromTheContainingApp() throws {
         let app = socketDirectory.appendingPathComponent("Fake.app")
         let helper = app.appendingPathComponent("Contents/Resources/MacMuteHelper")
         try FileManager.default.createDirectory(at: helper.deletingLastPathComponent(), withIntermediateDirectories: true)
