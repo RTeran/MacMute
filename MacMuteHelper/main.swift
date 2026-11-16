@@ -8,27 +8,6 @@ enum HelperLog {
 // MARK: - Native Messaging Protocol (stdin/stdout with 4-byte length prefix)
 
 class NativeMessaging {
-    static func readMessage() -> [String: Any]? {
-        // Read 4-byte length prefix (uint32 little-endian)
-        var lengthBytes = [UInt8](repeating: 0, count: 4)
-        let bytesRead = fread(&lengthBytes, 1, 4, stdin)
-        guard bytesRead == 4 else { return nil }
-
-        let length = UInt32(lengthBytes[0])
-            | (UInt32(lengthBytes[1]) << 8)
-            | (UInt32(lengthBytes[2]) << 16)
-            | (UInt32(lengthBytes[3]) << 24)
-
-        guard length > 0, length < 1_000_000 else { return nil }
-
-        var messageBytes = [UInt8](repeating: 0, count: Int(length))
-        let messageRead = fread(&messageBytes, 1, Int(length), stdin)
-        guard messageRead == Int(length) else { return nil }
-
-        let data = Data(messageBytes)
-        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-    }
-
     static func writeMessage(_ message: [String: Any]) {
         let data: Data
         do {
@@ -245,14 +224,18 @@ scheduleConnect()
 
 // Read from stdin (Chrome extension messages) on a background thread
 DispatchQueue.global(qos: .userInteractive).async {
+    let reader = NativeMessageReader(fileDescriptor: STDIN_FILENO)
     while true {
-        guard let message = NativeMessaging.readMessage() else {
+        switch reader.next() {
+        case .endOfInput:
             HelperLog.logger.notice("stdin closed, exiting")
             exit(0)
+        case let .skipped(reason):
+            HelperLog.logger.error("Skipping a message from the extension: \(reason, privacy: .public)")
+        case let .message(message):
+            HelperLog.logger.info("Relaying extension → app: \(String(describing: message), privacy: .public)")
+            socketClient.sendMessage(message)
         }
-
-        HelperLog.logger.info("Relaying extension → app: \(String(describing: message), privacy: .public)")
-        socketClient.sendMessage(message)
     }
 }
 

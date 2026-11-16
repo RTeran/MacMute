@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A1000100 /* NativeMessageReaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000093 /* NativeMessageReaderTests.swift */; };
+		A1000098 /* NativeMessageReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000092 /* NativeMessageReader.swift */; };
+		A1000099 /* NativeMessageReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000092 /* NativeMessageReader.swift */; };
 		A1000001 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000001 /* AppDelegate.swift */; };
 		A1000002 /* StatusBarController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000002 /* StatusBarController.swift */; };
 		A1000003 /* ShortcutConfigView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000003 /* ShortcutConfigView.swift */; };
@@ -77,6 +80,8 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A2000093 /* NativeMessageReaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeMessageReaderTests.swift; sourceTree = "<group>"; };
+		A2000092 /* NativeMessageReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeMessageReader.swift; sourceTree = "<group>"; };
 		A2000001 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		A2000002 /* StatusBarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusBarController.swift; sourceTree = "<group>"; };
 		A2000003 /* ShortcutConfigView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutConfigView.swift; sourceTree = "<group>"; };
@@ -181,6 +186,7 @@
 			isa = PBXGroup;
 			children = (
 				A2000020 /* main.swift */,
+				A2000092 /* NativeMessageReader.swift */,
 			);
 			path = MacMuteHelper;
 			sourceTree = "<group>";
@@ -216,6 +222,7 @@
 				A2000085 /* LogPreviewTests.swift */,
 				A2000089 /* ChromeConnectionStatusTests.swift */,
 				A2000091 /* HelperExecutableTests.swift */,
+				A2000093 /* NativeMessageReaderTests.swift */,
 				A2000087 /* PeerCodeVerifierTests.swift */,
 				A2000083 /* MuteStateCoordinatorTests.swift */,
 			);
@@ -337,6 +344,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1000020 /* main.swift in Sources */,
+				A1000098 /* NativeMessageReader.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -362,6 +370,8 @@
 				A1000094 /* ChromeConnectionStatusTests.swift in Sources */,
 				A1000096 /* HelperExecutable.swift in Sources */,
 				A1000097 /* HelperExecutableTests.swift in Sources */,
+				A1000099 /* NativeMessageReader.swift in Sources */,
+				A1000100 /* NativeMessageReaderTests.swift in Sources */,
 				A1000090 /* PeerCodeVerifier.swift in Sources */,
 				A1000091 /* PeerCodeVerifierTests.swift in Sources */,
 				A1000084 /* MuteStateCoordinator.swift in Sources */,
