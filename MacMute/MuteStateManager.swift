@@ -18,19 +18,21 @@ class MuteStateManager: ObservableObject {
 
     @Published var micMutedColor: Color = .red {
         didSet {
-            saveColor(micMutedColor, forKey: "micMutedColorData")
+            scheduleColorSave()
             refreshOverlayIfVisible()
         }
     }
     @Published var cameraOffColor: Color = .blue {
         didSet {
-            saveColor(cameraOffColor, forKey: "cameraOffColorData")
+            scheduleColorSave()
             refreshOverlayIfVisible()
         }
     }
 
     private static let unconfirmedColor = NSColor.systemOrange.withAlphaComponent(0.85)
 
+    // The ColorPicker reports every step of a drag, so colors are saved once it settles.
+    private let colorSaveDebouncer = Debouncer(delay: 0.5)
     private let socketServer = SocketServer()
     private let overlayManager = MenuBarOverlayManager()
     private let shortcutManager = GlobalShortcutManager.shared
@@ -92,6 +94,7 @@ class MuteStateManager: ObservableObject {
     }
 
     func stop() {
+        colorSaveDebouncer.flush()
         shortcutManager.stop()
         socketServer.stop()
     }
@@ -181,6 +184,14 @@ class MuteStateManager: ObservableObject {
     private func refreshOverlayIfVisible() {
         guard isMuted || isCameraOff else { return }
         pushOverlayState()
+    }
+
+    private func scheduleColorSave() {
+        colorSaveDebouncer.schedule { [weak self] in
+            guard let self = self else { return }
+            self.saveColor(self.micMutedColor, forKey: "micMutedColorData")
+            self.saveColor(self.cameraOffColor, forKey: "cameraOffColorData")
+        }
     }
 
     private func saveColor(_ color: Color, forKey key: String) {
