@@ -253,6 +253,30 @@ final class SocketServerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: target.appendingPathComponent("s.sock").path))
     }
 
+    func testStoppingAListeningServerRemovesItsSocket() {
+        _ = connectHelper()
+
+        server.stop()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: socketPath))
+    }
+
+    func testStoppingAServerThatRefusedToStartLeavesTheFileAtItsPathAlone() throws {
+        server.stop()
+        try FileManager.default.removeItem(at: socketDirectory)
+        let target = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("mm-target-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: target) }
+        let victim = target.appendingPathComponent("s.sock")
+        XCTAssertTrue(FileManager.default.createFile(atPath: victim.path, contents: Data("keep".utf8)))
+        try FileManager.default.createSymbolicLink(at: socketDirectory, withDestinationURL: target)
+        startServer()
+
+        server.stop()
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: victim.path))
+    }
+
     func testRefusesASocketDirectoryThatIsNotADirectory() throws {
         let file = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("mm-file-\(UUID().uuidString)")
         XCTAssertTrue(FileManager.default.createFile(atPath: file.path, contents: Data()))

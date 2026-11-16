@@ -30,6 +30,8 @@ class SocketServer {
     private var verifyPeer: VerifyPeer = { _ in .failure(.requirementNotSatisfied(errSecCSReqFailed)) }
     private var rejectionLog = PeerRejectionLog()
     private var serverSocket: Int32 = -1
+    // A refused start must not unlink whatever sits at socketPath, e.g. behind a symlinked directory.
+    private var didBind = false
     private var listenSource: DispatchSourceRead?
     private var clients: [ClientID: Client] = [:]
     private var nextClientID: ClientID = 1
@@ -123,8 +125,9 @@ class SocketServer {
             clients.values.forEach { $0.readSource.cancel() }
             clients.removeAll()
             serverSocket = -1
+            if didBind { unlink(socketPath) }
+            didBind = false
         }
-        unlink(socketPath)
     }
 
     /// `completion` runs on the main queue.
@@ -228,11 +231,13 @@ class SocketServer {
             close(serverSocket)
             return
         }
+        didBind = true
 
         guard chmod(socketPath, 0o600) == 0 else {
             logger.error("Failed to restrict socket \(self.socketName, privacy: .public) to the owner: \(String(cString: strerror(errno)), privacy: .public)")
             close(serverSocket)
             unlink(socketPath)
+            didBind = false
             return
         }
 
