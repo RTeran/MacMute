@@ -1,6 +1,7 @@
 import XCTest
 
 final class SocketServerTests: XCTestCase {
+    private var socketDirectory: URL!
     private var socketPath: String!
     private var server: SocketServer!
     private var clients: [Int32] = []
@@ -12,7 +13,8 @@ final class SocketServerTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        socketPath = NSTemporaryDirectory() + "mm-\(UUID().uuidString.prefix(8)).sock"
+        socketDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("mm-\(UUID().uuidString.prefix(8))")
+        socketPath = socketDirectory.appendingPathComponent("s.sock").path
         startServer()
     }
 
@@ -22,6 +24,7 @@ final class SocketServerTests: XCTestCase {
         clients.forEach { close($0) }
         server.stop()
         unlink(socketPath)
+        try? FileManager.default.removeItem(at: socketDirectory)
         super.tearDown()
     }
 
@@ -29,7 +32,11 @@ final class SocketServerTests: XCTestCase {
         maxClients: Int = SocketServer.defaultMaxClients,
         verifyPeer: @escaping SocketServer.VerifyPeer = { _ in .success(()) }
     ) {
-        server = SocketServer(socketPath: socketPath, maxClients: maxClients, verifyPeer: verifyPeer)
+        startServer(maxClients: maxClients, makeVerifyPeer: { .success(verifyPeer) })
+    }
+
+    private func startServer(maxClients: Int, makeVerifyPeer: @escaping SocketServer.MakeVerifyPeer) {
+        server = SocketServer(socketPath: socketPath, maxClients: maxClients, makeVerifyPeer: makeVerifyPeer)
         server.onClientConnected = { [weak self] id in
             guard let self else { return }
             self.connectedIDs.append(id)
@@ -157,6 +164,49 @@ final class SocketServerTests: XCTestCase {
         let attributes = try FileManager.default.attributesOfItem(atPath: socketPath)
 
         XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    }
+
+    func testBuildsThePeerCheckOnceWhenItStarts() {
+        server.stop()
+        var builds = 0
+        startServer(maxClients: 4, makeVerifyPeer: {
+            builds += 1
+            return .success { _ in .success(()) }
+        })
+
+        _ = connectHelper()
+        _ = connectHelper()
+
+        XCTAssertEqual(builds, 1)
+    }
+
+    func testDoesNotListenWhenTheTrustedRequirementCannotBeBuilt() {
+        server.stop()
+        startServer(maxClients: 1, makeVerifyPeer: { .failure(.ownSignatureUnavailable(errSecCSUnsigned)) })
+
+        XCTAssertEqual(send(["type": "ping"], to: 1), "no_socket_client")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: socketPath))
+    }
+
+    func testDoesNotListenWhenTheSocketDirectoryIsASymbolicLink() throws {
+        server.stop()
+        try FileManager.default.removeItem(at: socketDirectory)
+        let target = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("mm-target-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: target) }
+        try FileManager.default.createSymbolicLink(at: socketDirectory, withDestinationURL: target)
+        startServer()
+
+        XCTAssertEqual(send(["type": "ping"], to: 1), "no_socket_client")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: target.appendingPathComponent("s.sock").path))
+    }
+
+    func testRefusesASocketDirectoryThatIsNotADirectory() throws {
+        let file = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("mm-file-\(UUID().uuidString)")
+        XCTAssertTrue(FileManager.default.createFile(atPath: file.path, contents: Data()))
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        XCTAssertThrowsError(try SocketServer.prepareDirectory(file))
     }
 
     func testCreatesTheSocketDirectoryForTheOwnerOnly() throws {
@@ -325,5 +375,38 @@ final class SocketServerTests: XCTestCase {
                 connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
+    }
+}
+
+final class PeerRejectionLogTests: XCTestCase {
+    func testReportsTheFirstRejectionOfAProcessAsAnErrorAndLaterOnesAsDebug() {
+        var log = PeerRejectionLog()
+
+        let first = log.entry(for: .peerCodeUnavailable(-1), pid: 42)
+        let second = log.entry(for: .peerCodeUnavailable(-1), pid: 42)
+        let other = log.entry(for: .peerCodeUnavailable(-1), pid: 43)
+
+        XCTAssertEqual(first.level, .error)
+        XCTAssertEqual(second.level, .debug)
+        XCTAssertEqual(other.level, .error)
+    }
+
+    func testNamesTheProcessAndTheReason() {
+        var log = PeerRejectionLog()
+
+        let entry = log.entry(for: .peerCodeUnavailable(-67068), pid: 42)
+
+        XCTAssertTrue(entry.message.contains("pid 42"), entry.message)
+        XCTAssertTrue(entry.message.contains(PeerVerificationError.peerCodeUnavailable(-67068).description), entry.message)
+        XCTAssertFalse(entry.message.contains("reload"), entry.message)
+    }
+
+    func testSuggestsReloadingTheExtensionWhenTheSignatureDoesNotMatch() {
+        var log = PeerRejectionLog()
+
+        let entry = log.entry(for: .requirementNotSatisfied(-67050), pid: nil)
+
+        XCTAssertTrue(entry.message.contains("pid unknown"), entry.message)
+        XCTAssertTrue(entry.message.contains("reload the MacMute extension"), entry.message)
     }
 }

@@ -64,10 +64,6 @@ enum PeerCodeVerifier {
         return .success(requirement)
     }
 
-    static func verify(socket: Int32, againstCodeAt url: URL) -> Result<Void, PeerVerificationError> {
-        designatedRequirement(ofCodeAt: url).flatMap { verify(socket: socket, against: $0) }
-    }
-
     static func verify(socket: Int32, against requirement: SecRequirement) -> Result<Void, PeerVerificationError> {
         peerCode(of: socket).flatMap { code in
             let status = SecCodeCheckValidity(code, [], requirement)

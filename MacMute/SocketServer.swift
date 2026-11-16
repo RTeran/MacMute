@@ -13,6 +13,8 @@ typealias ClientID = Int
 
 class SocketServer {
     typealias VerifyPeer = (_ socket: Int32) -> Result<Void, PeerVerificationError>
+    /// Called once when the server starts, so the trusted requirement cannot change while it runs.
+    typealias MakeVerifyPeer = () -> Result<VerifyPeer, PeerVerificationError>
 
     static let defaultMaxClients = 16
     private static let listenBacklog: Int32 = 8
@@ -24,7 +26,9 @@ class SocketServer {
 
     private let socketPath: String
     private let maxClients: Int
-    private let verifyPeer: VerifyPeer
+    private let makeVerifyPeer: MakeVerifyPeer
+    private var verifyPeer: VerifyPeer = { _ in .failure(.requirementNotSatisfied(errSecCSReqFailed)) }
+    private var rejectionLog = PeerRejectionLog()
     private var serverSocket: Int32 = -1
     private var listenSource: DispatchSourceRead?
     private var clients: [ClientID: Client] = [:]
@@ -37,32 +41,50 @@ class SocketServer {
     var onClientConnected: ((ClientID) -> Void)?
     var onClientDisconnected: ((ClientID) -> Void)?
 
-    /// Only accepts helpers signed like the one bundled in this app.
+    /// Only accepts helpers this app trusts; see `PeerCodeVerifier.trustedHelperRequirement`.
     convenience init() {
         let appSupport = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/MacMute")
-        do {
-            try Self.prepareDirectory(appSupport)
-        } catch {
-            Logger(subsystem: "com.macmute.app", category: "socket")
-                .error("Cannot restrict the socket directory to the owner: \(error.localizedDescription, privacy: .public)")
-        }
         let bundledHelper = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/MacMuteHelper")
-        self.init(socketPath: appSupport.appendingPathComponent("macmute.sock").path) { socket in
-            PeerCodeVerifier.verify(socket: socket, againstCodeAt: bundledHelper)
+        self.init(socketPath: appSupport.appendingPathComponent("macmute.sock").path) {
+            PeerCodeVerifier.ownStaticCode()
+                .flatMap {
+                    PeerCodeVerifier.trustedHelperRequirement(
+                        signedLike: $0, helperIdentifier: "com.macmute.helper", bundledHelper: bundledHelper
+                    )
+                }
+                .map { requirement in { socket in PeerCodeVerifier.verify(socket: socket, against: requirement) } }
         }
     }
 
-    init(socketPath: String, maxClients: Int = SocketServer.defaultMaxClients, verifyPeer: @escaping VerifyPeer) {
+    init(socketPath: String, maxClients: Int = SocketServer.defaultMaxClients, makeVerifyPeer: @escaping MakeVerifyPeer) {
         self.socketPath = socketPath
         self.maxClients = maxClients
-        self.verifyPeer = verifyPeer
+        self.makeVerifyPeer = makeVerifyPeer
     }
 
+    /// Creates the directory, or restricts an existing one, so only the owner can reach the socket.
     static func prepareDirectory(_ url: URL) throws {
         let ownerOnly: [FileAttributeKey: Any] = [.posixPermissions: 0o700]
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: ownerOnly)
-        try FileManager.default.setAttributes(ownerOnly, ofItemAtPath: url.path)
+        do {
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: ownerOnly)
+        } catch {
+            throw SocketDirectoryError.operationFailed("createDirectory", String(describing: error))
+        }
+        do {
+            try FileManager.default.setAttributes(ownerOnly, ofItemAtPath: url.path)
+        } catch {
+            throw SocketDirectoryError.operationFailed("setAttributes", String(describing: error))
+        }
+        var info = stat()
+        guard lstat(url.path, &info) == 0 else {
+            throw SocketDirectoryError.operationFailed("lstat", String(cString: strerror(errno)))
+        }
+        let type = info.st_mode & S_IFMT
+        guard type != S_IFLNK else { throw SocketDirectoryError.symbolicLink }
+        guard type == S_IFDIR else { throw SocketDirectoryError.notADirectory }
+        guard info.st_uid == getuid() else { throw SocketDirectoryError.ownedByAnotherUser(info.st_uid) }
+        guard info.st_mode & 0o077 == 0 else { throw SocketDirectoryError.accessibleByOthers(info.st_mode & 0o777) }
     }
 
     // The full path contains the user name.
@@ -145,6 +167,21 @@ class SocketServer {
     }
 
     private func startServer() {
+        let directory = URL(fileURLWithPath: socketPath).deletingLastPathComponent()
+        do {
+            try Self.prepareDirectory(directory)
+        } catch {
+            logger.fault("Not starting the socket server: unsafe socket directory \(directory.path, privacy: .public): \(String(describing: error), privacy: .public)")
+            return
+        }
+        switch makeVerifyPeer() {
+        case let .success(verify):
+            verifyPeer = verify
+        case let .failure(error):
+            logger.fault("Not starting the socket server: cannot build the trusted helper requirement: \(error.description, privacy: .public)")
+            return
+        }
+
         // Remove existing socket file
         unlink(socketPath)
 
@@ -211,7 +248,8 @@ class SocketServer {
 
         // Checked before the limit, so peers that fail it cannot use up the slots.
         if case let .failure(error) = verifyPeer(client) {
-            logger.error("Rejecting peer: its code signature does not match the bundled helper (\(String(describing: error), privacy: .public))")
+            let entry = rejectionLog.entry(for: error, pid: PeerCodeVerifier.peerProcessID(of: client))
+            logger.log(level: entry.level, "\(entry.message, privacy: .public)")
             close(client)
             return
         }
@@ -299,5 +337,40 @@ class SocketServer {
         DispatchQueue.main.async { [weak self] in
             self?.onClientDisconnected?(id)
         }
+    }
+}
+
+enum SocketDirectoryError: Error, CustomStringConvertible {
+    case operationFailed(_ operation: String, _ reason: String)
+    case symbolicLink
+    case notADirectory
+    case ownedByAnotherUser(uid_t)
+    case accessibleByOthers(mode_t)
+
+    var description: String {
+        switch self {
+        case let .operationFailed(operation, reason): return "\(operation) failed: \(reason)"
+        case .symbolicLink: return "it is a symbolic link"
+        case .notADirectory: return "it is not a directory"
+        case let .ownedByAnotherUser(uid): return "it is owned by uid \(uid)"
+        case let .accessibleByOthers(mode): return "its mode \(String(mode, radix: 8)) lets other users in"
+        }
+    }
+}
+
+/// A rejected helper retries every few seconds; only the first rejection of each process is an error.
+struct PeerRejectionLog {
+    private static let maxRemembered = 256
+    private var reported: Set<pid_t> = []
+
+    mutating func entry(for error: PeerVerificationError, pid: pid_t?) -> (level: OSLogType, message: String) {
+        let key = pid ?? -1
+        if reported.count >= Self.maxRemembered { reported.removeAll() }
+        let isFirst = reported.insert(key).inserted
+        var message = "Rejecting peer pid \(pid.map(String.init) ?? "unknown"): \(error.description)"
+        if case .requirementNotSatisfied = error {
+            message += ". If it is the MacMute helper of another build, reload the MacMute extension in Chrome."
+        }
+        return (isFirst ? .error : .debug, message)
     }
 }

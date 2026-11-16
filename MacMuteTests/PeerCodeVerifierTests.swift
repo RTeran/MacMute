@@ -14,12 +14,6 @@ final class PeerCodeVerifierTests: XCTestCase {
         super.tearDown()
     }
 
-    func testAcceptsAPeerRunningTheExpectedCode() throws {
-        let result = PeerCodeVerifier.verify(socket: sockets[0], againstCodeAt: try ownCodeURL())
-
-        XCTAssertNoThrow(try result.get())
-    }
-
     func testRejectsAPeerThatDoesNotSatisfyTheRequirement() throws {
         var requirement: SecRequirement?
         XCTAssertEqual(SecRequirementCreateWithString(#"identifier "com.macmute.helper""# as CFString, [], &requirement), errSecSuccess)
@@ -31,18 +25,11 @@ final class PeerCodeVerifierTests: XCTestCase {
         }
     }
 
-    func testRejectsWhenTheExpectedCodeIsMissing() {
-        let missing = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("missing-\(UUID().uuidString)")
-
-        let result = PeerCodeVerifier.verify(socket: sockets[0], againstCodeAt: missing)
-
-        guard case .failure(.expectedCodeUnavailable) = result else {
-            return XCTFail("Expected expectedCodeUnavailable, got \(result)")
-        }
-    }
-
     func testRejectsASocketWithoutPeer() throws {
-        let result = PeerCodeVerifier.verify(socket: -1, againstCodeAt: try ownCodeURL())
+        var requirement: SecRequirement?
+        XCTAssertEqual(SecRequirementCreateWithString("anchor apple" as CFString, [], &requirement), errSecSuccess)
+
+        let result = PeerCodeVerifier.verify(socket: -1, against: try XCTUnwrap(requirement))
 
         guard case .failure(.peerTokenUnavailable) = result else {
             return XCTFail("Expected peerTokenUnavailable, got \(result)")
