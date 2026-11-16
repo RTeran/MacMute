@@ -420,6 +420,9 @@ final class SocketServerTests: XCTestCase {
     }
 
     func testARestartedServerTakesTheLockAgain() {
+        // The server reads its state callback on main when a report runs, so a .listening queued
+        // before stop() would reach the restarted server's expectation.
+        if !states.contains(.listening) { wait(for: [expectState(.listening)], timeout: 2) }
         server.stop()
         let listening = expectState(.listening)
         server.start()
