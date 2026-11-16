@@ -61,6 +61,8 @@ final class MuteStateCoordinator {
                 return
             }
             self.router.recordConfirmedToggle(target, newState, from: recipient)
+            // The confirmation counts as activity and can change which helper is selected.
+            self.refreshDisplay()
         }
     }
 

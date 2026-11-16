@@ -329,6 +329,19 @@ final class MuteStateCoordinatorTests: XCTestCase {
 
     // MARK: - Display changes
 
+    func testAConfirmationThatMovesTheSelectionRedrawsTheIndicator() {
+        connectWithMic(1, muted: false)
+        coordinator.handle(["type": "state_update", "muted": true], from: 1)
+        coordinator.helperConnected(2)
+        coordinator.handle(["type": "call_status", "inCall": true], from: 2)
+        coordinator.toggle(.mic)
+        coordinator.handle(["type": "call_status", "inCall": false], from: 2)
+
+        coordinator.handle(toggleResult(.mic, "r1", ok: true, newState: false), from: 2)
+
+        XCTAssertFalse(coordinator.displayed.isMuted)
+    }
+
     func testARepeatedStateDoesNotRedrawTheIndicator() {
         connectWithMic(1, muted: true)
         events.removeAll()
