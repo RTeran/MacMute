@@ -167,6 +167,7 @@ struct ShortcutConfigView: View {
                     self.isRecordingMic = false
                     return nil
                 }
+                self.cameraConflictMessage = nil
                 UserDefaults.standard.set(shortcut, forKey: "globalShortcut")
                 UserDefaults.standard.set(Int(event.keyCode), forKey: "shortcutKeyCode")
                 UserDefaults.standard.set(event.modifierFlags.rawValue, forKey: "shortcutModifiers")
@@ -201,6 +202,7 @@ struct ShortcutConfigView: View {
                     self.isRecordingCamera = false
                     return nil
                 }
+                self.micConflictMessage = nil
                 UserDefaults.standard.set(shortcut, forKey: "cameraShortcut")
                 UserDefaults.standard.set(Int(event.keyCode), forKey: "cameraShortcutKeyCode")
                 UserDefaults.standard.set(event.modifierFlags.rawValue, forKey: "cameraShortcutModifiers")
