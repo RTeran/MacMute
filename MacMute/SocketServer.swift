@@ -5,6 +5,7 @@ enum SocketSendError: String, Error {
     case noSocketClient = "no_socket_client"
     case serializationFailed = "serialization_failed"
     case writeFailed = "write_failed"
+    case appShuttingDown = "app_shutting_down"
 }
 
 /// Identifies one connected helper, one per Chrome profile. Never reused while the server runs.

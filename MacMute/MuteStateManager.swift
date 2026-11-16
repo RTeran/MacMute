@@ -39,7 +39,7 @@ class MuteStateManager: ObservableObject {
             confirmationTimeouts: .standard,
             feedbackDuration: UnconfirmedFeedback.duration,
             send: { [weak self] message, helper, completion in
-                guard let self = self else { return completion(.failure(.noSocketClient)) }
+                guard let self = self else { return completion(.failure(.appShuttingDown)) }
                 self.socketServer.sendMessage(message, to: helper, completion: completion)
             }
         )
