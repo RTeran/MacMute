@@ -403,13 +403,24 @@ final class PendingToggleTrackerTests: XCTestCase {
         XCTAssertNil(second.expected)
     }
 
-    func testBeginWithoutAKnownStateExpectsAnyState() {
+    func testAToggleWithoutBaselineResolvesOnlyByItsRequestId() {
         var tracker = PendingToggleTracker()
 
         let toggle = tracker.begin(.mic, requestId: "r1", confirmedState: nil)
 
         XCTAssertNil(toggle.expected)
-        XCTAssertNotNil(tracker.resolvePassive(.mic, newState: false))
+        XCTAssertNil(tracker.resolvePassive(.mic, newState: false))
+        XCTAssertNil(tracker.resolvePassive(.mic, newState: true))
+        XCTAssertNotNil(tracker.resolve(.mic, requestId: "r1"))
+    }
+
+    func testAPressChainedOnAToggleWithoutBaselineHasNoBaseline() {
+        var tracker = PendingToggleTracker()
+        _ = tracker.begin(.mic, requestId: "r1", confirmedState: nil)
+
+        let second = tracker.begin(.mic, requestId: "r2", confirmedState: false)
+
+        XCTAssertNil(second.expected)
     }
 
     func testResolveRequiresTheExactRequestId() {

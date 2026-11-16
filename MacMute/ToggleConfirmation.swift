@@ -18,11 +18,16 @@ enum ToggleTarget: String {
 struct PendingToggleTracker {
     struct Pending: Equatable {
         let requestId: String
-        /// `nil` when the state before the press was unknown: any state the recipient reports confirms it.
+        /// `nil` when the state before the press was unknown. Then only its own `toggle_result` confirms
+        /// it, whatever state it carries: a passive update may be a reply to `get_state` from before the press.
         let expected: Bool?
 
-        func accepts(_ newState: Bool) -> Bool {
+        func acceptsResult(_ newState: Bool) -> Bool {
             expected.map { $0 == newState } ?? true
+        }
+
+        func acceptsPassiveUpdate(_ newState: Bool) -> Bool {
+            expected == newState
         }
     }
 
@@ -47,7 +52,7 @@ struct PendingToggleTracker {
     }
 
     mutating func resolvePassive(_ target: ToggleTarget, newState: Bool) -> Pending? {
-        guard let toggle = pending[target], toggle.accepts(newState) else { return nil }
+        guard let toggle = pending[target], toggle.acceptsPassiveUpdate(newState) else { return nil }
         pending[target] = nil
         return toggle
     }
@@ -211,7 +216,7 @@ final class ToggleConfirmation {
 
         case let (.confirmed(newState), requestId?):
             if let toggle = pendingToggles.resolve(target, requestId: requestId) {
-                if toggle.accepts(newState) {
+                if toggle.acceptsResult(newState) {
                     confirmed(target, toggle, newState: newState, source: result.source ?? "unknown")
                 } else {
                     unconfirm(target, toggle, reason: "unexpected_state", source: result.source)
@@ -220,7 +225,7 @@ final class ToggleConfirmation {
                 logger.notice("toggle_result for already resolved \(target.rawValue, privacy: .public) request \(preview(requestId), privacy: .public), source \(preview(result.source ?? "unknown"), privacy: .public)")
             }
             // A late success after the timeout still carries the real state.
-            endUnconfirmedFeedback(for: target, reached: newState)
+            endUnconfirmedFeedback(for: target, reached: newState, requestId: requestId)
 
         case let (.confirmed(newState), nil):
             logger.warning("toggle_result for \(target.rawValue, privacy: .public) without requestId, matching it as a passive update")
@@ -242,7 +247,7 @@ final class ToggleConfirmation {
         if let toggle = pendingToggles.resolvePassive(target, newState: newState) {
             confirmed(target, toggle, newState: newState, source: "passive_update")
         }
-        endUnconfirmedFeedback(for: target, reached: newState)
+        endUnconfirmedFeedback(for: target, reached: newState, requestId: nil)
     }
 
     private func confirmed(
@@ -284,9 +289,12 @@ final class ToggleConfirmation {
 
     // A state that is not the one the failed press wanted (e.g. the first press of a fast double
     // press confirming late) must not hide the warning.
-    private func endUnconfirmedFeedback(for target: ToggleTarget, reached newState: Bool) {
-        guard let failed = unconfirmed,
-              failed.target == target, failed.toggle.accepts(newState) else { return }
+    private func endUnconfirmedFeedback(for target: ToggleTarget, reached newState: Bool, requestId: String?) {
+        guard let failed = unconfirmed, failed.target == target else { return }
+        let ends = requestId == failed.toggle.requestId
+            ? failed.toggle.acceptsResult(newState)
+            : failed.toggle.acceptsPassiveUpdate(newState)
+        guard ends else { return }
         endUnconfirmedFeedback()
     }
 
