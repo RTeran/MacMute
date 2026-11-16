@@ -184,6 +184,15 @@ final class SocketClient {
             return scheduleRetry()
         }
 
+        // Like SocketServer: an app that stops reading must not block this queue on write; the
+        // write fails with EAGAIN instead and the connection is dropped.
+        let flags = fcntl(fd, F_GETFL)
+        guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
+            HelperLog.logger.error("Failed to make the app socket non-blocking: \(String(cString: strerror(errno)), privacy: .public)")
+            close(fd)
+            return scheduleRetry()
+        }
+
         if case let .failure(error) = verifyApp(fd) {
             let pid = PeerCodeVerifier.peerProcessID(of: fd).map(String.init) ?? "unknown"
             HelperLog.logger.error("Not talking to process \(pid, privacy: .public) at \(self.socketName, privacy: .public): \(error.description, privacy: .public)")

@@ -127,6 +127,23 @@ final class SocketClientTests: XCTestCase {
         wait(for: [retry], timeout: 2)
     }
 
+    func testDropsAndReconnectsWhenTheAppStopsReading() throws {
+        let app = try FakeApp(path: socketPath)
+        let connected = expectState(.connected)
+        client.start()
+        _ = try app.acceptConnection()
+        wait(for: [connected], timeout: 2)
+        let retry = expectState(.waiting(retryIn: 0.02))
+
+        let padding = String(repeating: "x", count: 1024)
+        for _ in 0..<512 { client.sendMessage(["type": "state_update", "padding": padding]) }
+
+        wait(for: [retry], timeout: 2)
+        let reconnected = expectState(.connected)
+        _ = try app.acceptConnection()
+        wait(for: [reconnected], timeout: 2)
+    }
+
     func testSplitsTwoMessagesThatArriveInOneWrite() throws {
         let app = try FakeApp(path: socketPath)
         var types: [String] = []
