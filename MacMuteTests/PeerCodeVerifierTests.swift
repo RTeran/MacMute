@@ -116,6 +116,13 @@ final class PeerCodeVerifierTests: XCTestCase {
         XCTAssertThrowsError(try PeerCodeVerifier.verify(socket: sockets[0], against: rebuilt).get())
     }
 
+    func testReadsTheSignatureOfTheRunningCode() throws {
+        var path: CFURL?
+        XCTAssertEqual(SecCodeCopyPath(try PeerCodeVerifier.ownStaticCode().get(), [], &path), errSecSuccess)
+
+        XCTAssertEqual(try XCTUnwrap(path) as URL, try ownCodeURL())
+    }
+
     func testReportsThePeerProcessId() {
         XCTAssertEqual(PeerCodeVerifier.peerProcessID(of: sockets[0]), getpid())
     }

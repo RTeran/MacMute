@@ -4,6 +4,7 @@ import Security
 
 enum PeerVerificationError: Error, Equatable, CustomStringConvertible {
     case ownSignatureUnavailable(OSStatus)
+    case ownSignatureInvalid(OSStatus)
     case expectedCodeUnavailable(path: String, status: OSStatus)
     case requirementUnbuildable(OSStatus)
     case peerTokenUnavailable(errno: Int32)
@@ -14,6 +15,8 @@ enum PeerVerificationError: Error, Equatable, CustomStringConvertible {
         switch self {
         case let .ownSignatureUnavailable(status):
             return "cannot read this app's own signature (OSStatus \(status))"
+        case let .ownSignatureInvalid(status):
+            return "this app's running code does not match a valid signature on disk (OSStatus \(status))"
         case let .expectedCodeUnavailable(path, status):
             return "cannot read the signature of \(path) (OSStatus \(status))"
         case let .requirementUnbuildable(status):
@@ -32,10 +35,14 @@ enum PeerVerificationError: Error, Equatable, CustomStringConvertible {
 /// requirement is derived from signatures instead of hard-coded hashes, so the same check works
 /// for ad-hoc Debug builds and for the signed release.
 enum PeerCodeVerifier {
+    /// The on-disk copy decides what is trusted, so it is used only after the running code has been
+    /// checked against it. The checked SecCode keeps that copy, so replacing the file later changes nothing.
     static func ownStaticCode() -> Result<SecStaticCode, PeerVerificationError> {
         var code: SecCode?
         var status = SecCodeCopySelf([], &code)
         guard status == errSecSuccess, let code else { return .failure(.ownSignatureUnavailable(status)) }
+        status = SecCodeCheckValidity(code, [], nil)
+        guard status == errSecSuccess else { return .failure(.ownSignatureInvalid(status)) }
         var staticCode: SecStaticCode?
         status = SecCodeCopyStaticCode(code, [], &staticCode)
         guard status == errSecSuccess, let staticCode else { return .failure(.ownSignatureUnavailable(status)) }
