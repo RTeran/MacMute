@@ -163,6 +163,66 @@ final class MuteStateCoordinatorTests: XCTestCase {
         XCTAssertFalse(coordinator.displayed.isMuted)
     }
 
+    // MARK: - Unknown state never shows
+
+    func testASelectedHelperWithoutStateShowsNothingActive() {
+        connectWithMic(1, muted: true)
+        coordinator.helperConnected(2)
+
+        coordinator.handle(["type": "call_status", "inCall": true], from: 2)
+
+        XCTAssertEqual(coordinator.displayed, DisplayedMuteState(isMuted: false, isCameraOff: false))
+    }
+
+    func testATargetWithoutStateInTheSelectedHelperShowsNotActive() {
+        connectWithMic(1, muted: true)
+        coordinator.handle(["type": "camera_state_update", "active": false], from: 1)
+        connectWithMic(2, muted: true)
+
+        coordinator.handle(["type": "call_status", "inCall": true], from: 2)
+
+        XCTAssertEqual(coordinator.displayed, DisplayedMuteState(isMuted: true, isCameraOff: false))
+    }
+
+    func testShowsNothingActiveOnceEveryHelperHasDisconnected() {
+        connectWithMic(1, muted: true)
+        coordinator.handle(["type": "camera_state_update", "active": false], from: 1)
+
+        coordinator.helperDisconnected(1)
+
+        XCTAssertEqual(coordinator.displayed, DisplayedMuteState(isMuted: false, isCameraOff: false))
+    }
+
+    func testAToggleResultConfirmsAToggleWithoutBaselineWhateverItsState() {
+        coordinator.helperConnected(1)
+        coordinator.toggle(.mic)
+
+        coordinator.handle(toggleResult(.mic, "r1", ok: true, newState: false), from: 1)
+
+        XCTAssertTrue(confirmationTimer().isCancelled)
+        XCTAssertFalse(events.contains("amber mic"))
+    }
+
+    func testTheRecipientsFirstStateConfirmsAToggleWithoutBaselineWhateverItsValue() {
+        coordinator.helperConnected(1)
+        coordinator.toggle(.camera)
+
+        coordinator.handle(["type": "camera_state_update", "active": true], from: 1)
+
+        XCTAssertTrue(confirmationTimer().isCancelled)
+        XCTAssertFalse(events.contains("amber camera"))
+    }
+
+    func testALateStateEndsTheWarningOfAToggleWithoutBaseline() {
+        coordinator.helperConnected(1)
+        coordinator.toggle(.mic)
+        confirmationTimer().fire()
+
+        coordinator.handle(["type": "state_update", "muted": false], from: 1)
+
+        XCTAssertEqual(events.last, "amber end muted=false")
+    }
+
     // MARK: - Confirmation only from the recipient
 
     func testAStateChangeFromAnotherHelperDoesNotConfirmTheToggle() {

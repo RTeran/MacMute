@@ -373,7 +373,7 @@ final class PendingToggleTrackerTests: XCTestCase {
 
         let toggle = tracker.begin(.mic, requestId: "r1", confirmedState: false)
 
-        XCTAssertTrue(toggle.expected)
+        XCTAssertEqual(toggle.expected, true)
     }
 
     func testBeginChainsExpectedStatesWhileAToggleIsPending() {
@@ -382,7 +382,16 @@ final class PendingToggleTrackerTests: XCTestCase {
 
         let second = tracker.begin(.mic, requestId: "r2", confirmedState: false)
 
-        XCTAssertFalse(second.expected)
+        XCTAssertEqual(second.expected, false)
+    }
+
+    func testBeginWithoutAKnownStateExpectsAnyState() {
+        var tracker = PendingToggleTracker()
+
+        let toggle = tracker.begin(.mic, requestId: "r1", confirmedState: nil)
+
+        XCTAssertNil(toggle.expected)
+        XCTAssertNotNil(tracker.resolvePassive(.mic, newState: false))
     }
 
     func testResolveRequiresTheExactRequestId() {

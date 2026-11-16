@@ -41,7 +41,7 @@ final class MuteStateCoordinator {
         toggleConfirmation = ToggleConfirmation(
             confirmationTimeouts: confirmationTimeouts,
             feedbackDuration: feedbackDuration,
-            confirmedState: { [unowned self] target in self.displayed[target] },
+            confirmedState: { [unowned self] target in self.router.selected.flatMap(self.router.profile)?[target] },
             send: { [unowned self] target, requestId, completion in
                 self.sendToggle(target, requestId: requestId, completion: completion)
             },
@@ -145,10 +145,12 @@ final class MuteStateCoordinator {
         }
     }
 
+    // An unknown state shows as not active: a false "muted" while the mic is live is the dangerous error.
     private func refreshDisplay() {
-        guard let selected = router.selected, let profile = router.profile(selected) else { return }
+        let profile = router.selected.flatMap(router.profile) ?? CallRouter.Profile()
         for target in [ToggleTarget.mic, .camera] {
-            guard let state = profile[target], state != displayed[target] else { continue }
+            let state = profile[target] ?? false
+            guard state != displayed[target] else { continue }
             displayed[target] = state
             onDisplayedStateChange?(target, displayed)
         }

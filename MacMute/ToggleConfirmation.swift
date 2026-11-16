@@ -18,15 +18,20 @@ enum ToggleTarget: String {
 struct PendingToggleTracker {
     struct Pending: Equatable {
         let requestId: String
-        let expected: Bool
+        /// `nil` when the state before the press was unknown: any state the recipient reports confirms it.
+        let expected: Bool?
+
+        func accepts(_ newState: Bool) -> Bool {
+            expected.map { $0 == newState } ?? true
+        }
     }
 
     private(set) var pending: [ToggleTarget: Pending] = [:]
 
     // A press made before the previous one is confirmed expects to undo that previous press.
-    mutating func begin(_ target: ToggleTarget, requestId: String, confirmedState: Bool) -> Pending {
-        let baseline = pending[target]?.expected ?? confirmedState
-        let toggle = Pending(requestId: requestId, expected: !baseline)
+    mutating func begin(_ target: ToggleTarget, requestId: String, confirmedState: Bool?) -> Pending {
+        let baseline = pending[target].map(\.expected) ?? confirmedState
+        let toggle = Pending(requestId: requestId, expected: baseline.map { !$0 })
         pending[target] = toggle
         return toggle
     }
@@ -38,7 +43,7 @@ struct PendingToggleTracker {
     }
 
     mutating func resolvePassive(_ target: ToggleTarget, newState: Bool) -> Pending? {
-        guard let toggle = pending[target], toggle.expected == newState else { return nil }
+        guard let toggle = pending[target], toggle.accepts(newState) else { return nil }
         pending[target] = nil
         return toggle
     }
@@ -135,7 +140,7 @@ final class ToggleConfirmation {
 
     private let confirmationTimeouts: ConfirmationTimeouts
     private let feedbackDuration: TimeInterval
-    private let confirmedState: (ToggleTarget) -> Bool
+    private let confirmedState: (ToggleTarget) -> Bool?
     private let send: Send
     private let schedule: Schedule
     private let makeRequestId: () -> String
@@ -147,7 +152,7 @@ final class ToggleConfirmation {
     init(
         confirmationTimeouts: ConfirmationTimeouts,
         feedbackDuration: TimeInterval,
-        confirmedState: @escaping (ToggleTarget) -> Bool,
+        confirmedState: @escaping (ToggleTarget) -> Bool?,
         send: @escaping Send,
         schedule: @escaping Schedule = ToggleConfirmation.scheduleOnMain,
         makeRequestId: @escaping () -> String = { UUID().uuidString }
@@ -176,7 +181,7 @@ final class ToggleConfirmation {
         confirmationTimers[target] = schedule(.confirmation, confirmationTimeouts.timeout(for: target)) { [weak self] in
             self?.fail(target, requestId: requestId, reason: "timeout")
         }
-        logger.debug("Toggle \(target.rawValue, privacy: .public) sent, request \(requestId, privacy: .public), expected \(toggle.expected)")
+        logger.debug("Toggle \(target.rawValue, privacy: .public) sent, request \(requestId, privacy: .public), expected \(String(describing: toggle.expected), privacy: .public)")
 
         send(target, requestId) { [weak self] outcome in
             if case let .failed(reason) = outcome {
@@ -196,8 +201,8 @@ final class ToggleConfirmation {
 
         case let (.confirmed(newState), requestId?):
             if let toggle = pendingToggles.resolve(target, requestId: requestId) {
-                if newState == toggle.expected {
-                    confirmed(target, toggle, source: result.source ?? "unknown")
+                if toggle.accepts(newState) {
+                    confirmed(target, toggle, newState: newState, source: result.source ?? "unknown")
                 } else {
                     unconfirm(target, toggle, reason: "unexpected_state", source: result.source)
                 }
@@ -225,15 +230,17 @@ final class ToggleConfirmation {
     // A passive update that reaches the state the pending press expects is as good as a toggle_result.
     func handlePassiveUpdate(_ target: ToggleTarget, newState: Bool) {
         if let toggle = pendingToggles.resolvePassive(target, newState: newState) {
-            confirmed(target, toggle, source: "passive_update")
+            confirmed(target, toggle, newState: newState, source: "passive_update")
         }
         endUnconfirmedFeedback(for: target, reached: newState)
     }
 
-    private func confirmed(_ target: ToggleTarget, _ toggle: PendingToggleTracker.Pending, source: String) {
+    private func confirmed(
+        _ target: ToggleTarget, _ toggle: PendingToggleTracker.Pending, newState: Bool, source: String
+    ) {
         confirmationTimers.removeValue(forKey: target)?.cancel()
         logger.notice("Toggle \(target.rawValue, privacy: .public) confirmed by \(source, privacy: .public), request \(toggle.requestId, privacy: .public)")
-        onConfirmed?(target, toggle.expected)
+        onConfirmed?(target, newState)
     }
 
     private func fail(_ target: ToggleTarget, requestId: String, reason: String) {
@@ -269,7 +276,7 @@ final class ToggleConfirmation {
     // press confirming late) must not hide the warning.
     private func endUnconfirmedFeedback(for target: ToggleTarget, reached newState: Bool) {
         guard let failed = unconfirmed,
-              failed.target == target, failed.toggle.expected == newState else { return }
+              failed.target == target, failed.toggle.accepts(newState) else { return }
         endUnconfirmedFeedback()
     }
 
