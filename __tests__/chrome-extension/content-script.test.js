@@ -960,6 +960,23 @@ describe("re-injection guard (window.__macMuteLoaded)", () => {
       expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
     }));
 
+  test("teardown cancels a pending call_left", () =>
+    withSharedObserverPaused(async () => {
+      jest.useFakeTimers();
+      window.__macMuteLoaded = orphan();
+      document.body.innerHTML = '<button data-is-muted="false"></button>';
+      const { instance, marker } = loadFreshInstance();
+      document.body.innerHTML = "<div>You left the meeting</div>";
+      await Promise.resolve();
+      jest.advanceTimersByTime(instance.STATE_REPORT_DELAY_MS);
+      chrome.runtime.sendMessage.mockClear();
+
+      marker.teardown();
+      jest.advanceTimersByTime(instance.CALL_LEFT_GRACE_MS);
+
+      expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
+    }));
+
   test("teardown ends a toggle in progress", async () => {
     window.__macMuteLoaded = orphan();
     document.body.innerHTML = '<button data-is-muted="false"></button>';
@@ -984,6 +1001,25 @@ describe("re-injection guard (window.__macMuteLoaded)", () => {
       document.querySelector("[data-is-muted]").setAttribute("data-is-muted", "true");
       await Promise.resolve();
       jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
+
+      expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
+      expect(chrome.runtime.onMessage.removeListener).toHaveBeenCalledWith(messageHandler);
+    }));
+
+  test("an instance whose extension context died during the grace period tears down instead of sending call_left", () =>
+    withSharedObserverPaused(async () => {
+      jest.useFakeTimers();
+      window.__macMuteLoaded = orphan();
+      document.body.innerHTML = '<button data-is-muted="false"></button>';
+      const { instance } = loadFreshInstance();
+      const messageHandler = chrome.runtime.onMessage.addListener.mock.calls[0][0];
+      document.body.innerHTML = "<div>You left the meeting</div>";
+      await Promise.resolve();
+      jest.advanceTimersByTime(instance.STATE_REPORT_DELAY_MS);
+      chrome.runtime.sendMessage.mockClear();
+
+      delete chrome.runtime.id;
+      jest.advanceTimersByTime(instance.CALL_LEFT_GRACE_MS);
 
       expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
       expect(chrome.runtime.onMessage.removeListener).toHaveBeenCalledWith(messageHandler);
@@ -1627,5 +1663,163 @@ describe("global state observer batching", () => {
     button.setAttribute("aria-label", "Settings");
 
     expect(script.findCameraButton()).toBeNull();
+  });
+});
+
+describe("call presence", () => {
+  const MIC_ON = '<button data-is-muted="false"></button>';
+  const MIC_MUTED = '<button data-is-muted="true"></button>';
+  const CAMERA_ON = '<button aria-label="Turn off camera"></button>';
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  function sentMessages() {
+    return chrome.runtime.sendMessage.mock.calls.map(([message]) => message);
+  }
+
+  function callLeftMessages() {
+    return sentMessages().filter((message) => message.type === "call_left");
+  }
+
+  async function replacePage(html) {
+    document.body.innerHTML = html;
+    await Promise.resolve();
+    jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
+  }
+
+  test("sends call_left once the call controls stay gone for the grace period", async () => {
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+
+    await replacePage("<div>You left the meeting</div>");
+    jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS - 1);
+    expect(callLeftMessages()).toEqual([]);
+
+    jest.advanceTimersByTime(1);
+    expect(callLeftMessages()).toEqual([{ type: "call_left" }]);
+  });
+
+  test("sends nothing when the controls come back within the grace period", async () => {
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+
+    await replacePage("<div>Loading</div>");
+    jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS / 2);
+    await replacePage(MIC_ON + CAMERA_ON);
+    jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS * 2);
+
+    expect(callLeftMessages()).toEqual([]);
+  });
+
+  test("checks the page again when the grace period ends", async () => {
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+
+    await replacePage("<div>Loading</div>");
+    jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS - script.STATE_REPORT_DELAY_MS / 2);
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    await Promise.resolve();
+    jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS / 2);
+
+    expect(callLeftMessages()).toEqual([]);
+  });
+
+  test("waits for a toggle in progress before deciding the call was left", async () => {
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+    script.toggleCamera();
+
+    await replacePage("<div>Loading</div>");
+    jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS);
+    expect(callLeftMessages()).toEqual([]);
+
+    jest.advanceTimersByTime(script.CAMERA_STATE_CHANGE_TIMEOUT_MS);
+    expect(callLeftMessages()).toEqual([{ type: "call_left" }]);
+  });
+
+  test("reports the state again when the call is joined again with the same state", async () => {
+    document.body.innerHTML = MIC_MUTED + CAMERA_ON;
+    script.startObserving();
+    await replacePage("<div>You left the meeting</div>");
+    jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS);
+    chrome.runtime.sendMessage.mockClear();
+
+    await replacePage(MIC_MUTED + CAMERA_ON);
+
+    expect(sentMessages()).toEqual([
+      { type: "state_update", muted: true },
+      { type: "camera_state_update", active: true },
+    ]);
+  });
+
+  test("does not judge the next call by a media session state from the previous one", async () => {
+    const setVisibility = (state) =>
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+    setVisibility("hidden");
+    try {
+      document.body.innerHTML = MIC_ON + CAMERA_ON;
+      script.startObserving();
+      window.dispatchEvent(
+        new MessageEvent("message", { data: { type: "macmute:media-session", kind: "mic", active: true }, source: window })
+      );
+      await replacePage("<div>You left the meeting</div>");
+      jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS);
+      chrome.runtime.sendMessage.mockClear();
+
+      await replacePage(MIC_MUTED + CAMERA_ON);
+
+      expect(sentMessages()).toContainEqual({ type: "state_update", muted: true });
+    } finally {
+      setVisibility("visible");
+    }
+  });
+
+  test.each(["get_state", "get_camera_state"])("answers %s with whether the tab is in a call", (type) => {
+    const inCallResponse = jest.fn();
+    const outOfCallResponse = jest.fn();
+
+    document.body.innerHTML = CAMERA_ON;
+    const result = messageListener({ type }, {}, inCallResponse);
+    document.body.innerHTML = "<div>Meet landing page</div>";
+    messageListener({ type }, {}, outOfCallResponse);
+
+    expect(inCallResponse).toHaveBeenCalledWith({ inCall: true });
+    expect(outOfCallResponse).toHaveBeenCalledWith({ inCall: false });
+    expect(result).toBe(false);
+  });
+
+  test("sends nothing when the call controls were never seen", async () => {
+    script.startObserving();
+
+    await replacePage("<div>Meet landing page</div>");
+    jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS * 2);
+
+    expect(callLeftMessages()).toEqual([]);
+  });
+
+  test("counts the camera button alone as being in the call", async () => {
+    document.body.innerHTML = CAMERA_ON;
+    script.startObserving();
+
+    await replacePage("<div>You left the meeting</div>");
+    jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS);
+
+    expect(callLeftMessages()).toEqual([{ type: "call_left" }]);
+  });
+
+  test("does not count a button with an unreadable state as leaving", async () => {
+    document.body.innerHTML = MIC_ON;
+    script.startObserving();
+
+    await replacePage('<button aria-label="Microphone settings"></button>');
+    jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS * 2);
+
+    expect(callLeftMessages()).toEqual([]);
   });
 });
