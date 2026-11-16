@@ -1,3 +1,4 @@
+import os
 import Security
 import XCTest
 
@@ -362,6 +363,32 @@ final class SocketClientTests: XCTestCase {
         XCTAssertEqual(SocketClient.connectionEnd(afterWriteFailingWith: ECONNRESET), .failed)
         XCTAssertEqual(SocketClient.connectionEnd(afterWriteFailingWith: EAGAIN), .failed)
         XCTAssertEqual(SocketClient.connectionEnd(afterWriteFailingWith: nil), .failed)
+    }
+
+    func testAnAppThatFailsVerificationDoesNotChangeTheRejectionCount() {
+        var attempts = 0
+        client = makeClient(verifyApp: {
+            .success { _ in
+                attempts += 1
+                return attempts == 2 ? .failure(.requirementNotSatisfied(errSecCSReqFailed)) : .success(())
+            }
+        }, maxConnectionsWithoutData: 3)
+        startServer(rejectingHelpers: true)
+        let stopped = expectState(.stopped(.rejectedByApp))
+
+        client.start()
+
+        wait(for: [stopped], timeout: 2)
+        XCTAssertEqual(states.filter { $0 == .connected }.count, 3)
+    }
+
+    func testReportsTheFirstUntrustedAppAsAnErrorAndRepeatsQuietlyUntilASuccess() {
+        var log = UntrustedAppLog()
+
+        XCTAssertEqual(log.levelForFailure(), .error)
+        XCTAssertEqual(log.levelForFailure(), .debug)
+        log.trustedAppConnected()
+        XCTAssertEqual(log.levelForFailure(), .error)
     }
 
     func testDataFromTheAppStartsTheRejectionCountOver() {

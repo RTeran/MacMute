@@ -5,7 +5,6 @@ import os
 enum SocketClientState: Equatable {
     case connected
     case waiting(retryIn: TimeInterval)
-    /// The client does not retry after this.
     case stopped(SocketClientStopReason)
 }
 
@@ -14,6 +13,21 @@ enum SocketClientStopReason: Equatable {
     case socketPathTooLong
     /// This helper's own signature or location leaves no app it could trust.
     case cannotVerifyApp(PeerVerificationError)
+}
+
+/// An impostor on the socket is retried with backoff for as long as it stays there, so only the
+/// first failure since the last trusted connection is worth an error.
+struct UntrustedAppLog {
+    private var reportedSinceLastSuccess = false
+
+    mutating func levelForFailure() -> OSLogType {
+        defer { reportedSinceLastSuccess = true }
+        return reportedSinceLastSuccess ? .debug : .error
+    }
+
+    mutating func trustedAppConnected() {
+        reportedSinceLastSuccess = false
+    }
 }
 
 func writeFully(_ fd: Int32, _ data: Data) -> (written: Int, errno: Int32?) {
@@ -48,6 +62,7 @@ final class SocketClient {
     private let makeVerifyApp: MakeVerifyApp
     private var connectionsWithoutData = 0
     private var receivedDataOnConnection = false
+    private var untrustedAppLog = UntrustedAppLog()
     private let queue = DispatchQueue(label: "com.macmute.helper.socket")
     private var backoff: RetryBackoff
     private var socketFD: Int32 = -1
@@ -216,7 +231,7 @@ final class SocketClient {
 
         if case let .failure(error) = verifyApp(fd) {
             let pid = PeerCodeVerifier.peerProcessID(of: fd).map(String.init) ?? "unknown"
-            HelperLog.logger.error("Not talking to process \(pid, privacy: .public) at \(self.socketName, privacy: .public): \(error.description, privacy: .public)")
+            HelperLog.logger.log(level: untrustedAppLog.levelForFailure(), "Not talking to process \(pid, privacy: .public) at \(self.socketName, privacy: .public): \(error.description, privacy: .public)")
             close(fd)
             return scheduleRetry()
         }
@@ -224,6 +239,7 @@ final class SocketClient {
         HelperLog.logger.notice("Connected to MacMute app")
         socketFD = fd
         receivedDataOnConnection = false
+        untrustedAppLog.trustedAppConnected()
         backoff.reset()
         startReading(fd)
         onStateChange?(.connected)

@@ -3,9 +3,7 @@ import Foundation
 enum NativeMessageReadResult {
     case message([String: Any])
     case skipped(String)
-    /// Chrome closed stdin between frames.
     case endOfInput
-    /// Chrome closed stdin partway through a frame.
     case truncated(missingBytes: Int)
     case readFailed(errno: Int32)
 }

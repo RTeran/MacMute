@@ -21,18 +21,19 @@ class NativeMessaging {
             UInt8((length >> 24) & 0xFF),
         ]
 
+        let total = 4 + data.count
         let headerWritten = fwrite(lengthBytes, 1, 4, stdout)
+        guard headerWritten == 4 else { failStdoutWrite(written: headerWritten, total: total, errno: errno) }
         let bodyWritten = data.withUnsafeBytes { rawBuffer in
             fwrite(rawBuffer.baseAddress, 1, data.count, stdout)
         }
-        guard headerWritten == 4, bodyWritten == data.count, fflush(stdout) == 0 else {
-            failStdoutWrite(written: headerWritten + bodyWritten, total: 4 + data.count)
-        }
+        guard bodyWritten == data.count else { failStdoutWrite(written: 4 + bodyWritten, total: total, errno: errno) }
+        guard fflush(stdout) == 0 else { failStdoutWrite(written: total, total: total, errno: errno) }
     }
 
     // A partial frame desyncs the length-prefixed stream, so any later message would be garbage.
-    private static func failStdoutWrite(written: Int, total: Int) -> Never {
-        HelperLog.logger.fault("Failed to write to Chrome (\(written, privacy: .public)/\(total, privacy: .public) bytes): \(String(cString: strerror(errno)), privacy: .public)")
+    private static func failStdoutWrite(written: Int, total: Int, errno code: Int32) -> Never {
+        HelperLog.logger.fault("Failed to write to Chrome (\(written, privacy: .public)/\(total, privacy: .public) bytes buffered): \(String(cString: strerror(code)), privacy: .public)")
         exit(1)
     }
 }
