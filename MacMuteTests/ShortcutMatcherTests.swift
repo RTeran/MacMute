@@ -76,35 +76,71 @@ final class ShortcutStoreTests: XCTestCase {
         super.tearDown()
     }
 
-    private func read() -> Shortcut? {
+    private func read() -> ShortcutReadResult {
         ShortcutStore.read(keyCodeKey: "keyCode", modifiersKey: "modifiers", from: defaults)
     }
 
+    private func store(keyCode: Int, modifiersRaw: UInt) {
+        defaults.set(keyCode, forKey: "keyCode")
+        defaults.set(modifiersRaw, forKey: "modifiers")
+    }
+
     private func store(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) {
-        defaults.set(Int(keyCode), forKey: "keyCode")
-        defaults.set(modifiers.rawValue, forKey: "modifiers")
+        store(keyCode: Int(keyCode), modifiersRaw: modifiers.rawValue)
     }
 
     func testReadsAShortcutOnTheAKey() {
         store(keyCode: 0, modifiers: [.command, .shift])
 
-        XCTAssertEqual(read(), Shortcut(keyCode: 0, modifiers: [.maskCommand, .maskShift]))
+        XCTAssertEqual(read(), .configured(Shortcut(keyCode: 0, modifiers: [.maskCommand, .maskShift])))
     }
 
     func testReadsAShortcutOnAnotherKey() {
         store(keyCode: 46, modifiers: [.control, .option])
 
-        XCTAssertEqual(read(), Shortcut(keyCode: 46, modifiers: [.maskControl, .maskAlternate]))
+        XCTAssertEqual(read(), .configured(Shortcut(keyCode: 46, modifiers: [.maskControl, .maskAlternate])))
     }
 
-    func testReturnsNilWhenNothingIsStored() {
-        XCTAssertNil(read())
+    func testKeepsOnlyShortcutModifiersFromTheRecordedFlags() {
+        let recorded = NSEvent.ModifierFlags([.command, .shift, .capsLock, .function]).rawValue | 0x100
+        store(keyCode: 46, modifiersRaw: recorded)
+
+        XCTAssertEqual(read(), .configured(Shortcut(keyCode: 46, modifiers: [.maskCommand, .maskShift])))
     }
 
-    func testReturnsNilWhenNoModifiersAreStored() {
+    func testKeepsTheShiftOnlyWarningWhenTheRecordedFlagsIncludeFunction() {
+        let recorded = NSEvent.ModifierFlags([.shift, .function]).rawValue
+        store(keyCode: 46, modifiersRaw: recorded)
+
+        XCTAssertEqual(read().shortcut?.usesShiftAsOnlyModifier, true)
+    }
+
+    func testIsNotConfiguredWhenNothingIsStored() {
+        XCTAssertEqual(read(), .notConfigured)
+    }
+
+    func testIsInvalidWhenNoModifiersAreStored() {
         store(keyCode: 46, modifiers: [])
 
-        XCTAssertNil(read())
+        XCTAssertEqual(read(), .invalid(keyCode: 46, modifiersRaw: 0))
+    }
+
+    func testIsInvalidWhenOnlyNonShortcutModifiersAreStored() {
+        let raw = NSEvent.ModifierFlags([.capsLock, .function, .numericPad]).rawValue
+
+        store(keyCode: 46, modifiersRaw: raw)
+
+        XCTAssertEqual(read(), .invalid(keyCode: 46, modifiersRaw: Int(raw)))
+    }
+
+    func testIsInvalidWhenTheKeyCodeIsOutOfRange() {
+        let raw = NSEvent.ModifierFlags.command.rawValue
+
+        store(keyCode: -1, modifiersRaw: raw)
+        XCTAssertEqual(read(), .invalid(keyCode: -1, modifiersRaw: Int(raw)))
+
+        store(keyCode: 70000, modifiersRaw: raw)
+        XCTAssertEqual(read(), .invalid(keyCode: 70000, modifiersRaw: Int(raw)))
     }
 }
 
@@ -115,6 +151,7 @@ final class ShortcutShiftOnlyTests: XCTestCase {
 
     func testIgnoresFlagsThatAreNotShortcutModifiers() {
         XCTAssertTrue(Shortcut(keyCode: 46, modifiers: [.maskShift, .maskAlphaShift]).usesShiftAsOnlyModifier)
+        XCTAssertTrue(Shortcut(keyCode: 46, modifiers: [.maskShift, .maskSecondaryFn]).usesShiftAsOnlyModifier)
     }
 
     func testDoesNotFlagShiftCombinedWithAnotherModifier() {

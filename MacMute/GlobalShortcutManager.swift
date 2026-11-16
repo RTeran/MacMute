@@ -39,14 +39,28 @@ struct ShortcutMatcher {
     }
 }
 
+enum ShortcutReadResult: Equatable {
+    case configured(Shortcut)
+    case notConfigured
+    case invalid(keyCode: Int, modifiersRaw: Int)
+
+    var shortcut: Shortcut? {
+        if case let .configured(shortcut) = self { return shortcut }
+        return nil
+    }
+}
+
 enum ShortcutStore {
-    static func read(keyCodeKey: String, modifiersKey: String, from defaults: UserDefaults) -> Shortcut? {
+    static func read(keyCodeKey: String, modifiersKey: String, from defaults: UserDefaults) -> ShortcutReadResult {
         // keyCode 0 is the A key, so presence of the value marks a configured shortcut.
-        guard defaults.object(forKey: keyCodeKey) != nil else { return nil }
+        guard defaults.object(forKey: keyCodeKey) != nil else { return .notConfigured }
         let keyCode = defaults.integer(forKey: keyCodeKey)
         let modifiersRaw = defaults.integer(forKey: modifiersKey)
-        guard modifiersRaw != 0, let validKeyCode = UInt16(exactly: keyCode) else { return nil }
-        return Shortcut(keyCode: validKeyCode, modifiers: cgFlags(from: modifiersRaw))
+        let modifiers = cgFlags(from: modifiersRaw)
+        guard !modifiers.isEmpty, let validKeyCode = UInt16(exactly: keyCode) else {
+            return .invalid(keyCode: keyCode, modifiersRaw: modifiersRaw)
+        }
+        return .configured(Shortcut(keyCode: validKeyCode, modifiers: modifiers))
     }
 
     private static func cgFlags(from modifiersRaw: Int) -> CGEventFlags {
@@ -162,12 +176,17 @@ class GlobalShortcutManager {
     }
 
     private func readShortcut(keyCodeKey: String, modifiersKey: String, target: ToggleTarget) -> Shortcut? {
-        guard let shortcut = ShortcutStore.read(keyCodeKey: keyCodeKey, modifiersKey: modifiersKey, from: .standard) else {
+        switch ShortcutStore.read(keyCodeKey: keyCodeKey, modifiersKey: modifiersKey, from: .standard) {
+        case let .configured(shortcut):
+            logger.notice("\(target.rawValue, privacy: .public) shortcut configured: keyCode \(shortcut.keyCode, privacy: .public), modifiers \(Self.describe(shortcut.modifiers), privacy: .public)")
+            return shortcut
+        case .notConfigured:
             logger.notice("No \(target.rawValue, privacy: .public) shortcut configured")
             return nil
+        case let .invalid(keyCode, modifiersRaw):
+            logger.error("Ignoring invalid \(target.rawValue, privacy: .public) shortcut: keyCode \(keyCode, privacy: .public), modifiers raw \(modifiersRaw, privacy: .public)")
+            return nil
         }
-        logger.notice("\(target.rawValue, privacy: .public) shortcut configured: keyCode \(shortcut.keyCode, privacy: .public), modifiers \(Self.describe(shortcut.modifiers), privacy: .public)")
-        return shortcut
     }
 
     private static func describe(_ flags: CGEventFlags) -> String {

@@ -272,13 +272,16 @@ private struct ShortcutRow: View {
 
     private var showsShiftOnlyWarning: Bool {
         guard !isRecording else { return false }
-        let shortcut = ShortcutStore.read(keyCodeKey: keyCodeKey, modifiersKey: modifiersKey, from: .standard)
-        return shortcut?.usesShiftAsOnlyModifier ?? false
+        return storedShortcut?.usesShiftAsOnlyModifier ?? false
+    }
+
+    private var storedShortcut: Shortcut? {
+        ShortcutStore.read(keyCodeKey: keyCodeKey, modifiersKey: modifiersKey, from: .standard).shortcut
     }
 
     private var currentDisplay: String {
         if isRecording { return "Press shortcut..." }
         let saved = UserDefaults.standard.string(forKey: defaultsKey) ?? ""
-        return saved.isEmpty ? "Not configured" : saved
+        return saved.isEmpty || storedShortcut == nil ? "Not configured" : saved
     }
 }
