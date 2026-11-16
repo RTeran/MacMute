@@ -128,6 +128,7 @@ final class ToggleConfirmation {
 
     var onUnconfirmedFeedbackStart: ((ToggleTarget) -> Void)?
     var onUnconfirmedFeedbackEnd: (() -> Void)?
+    var onConfirmed: ((ToggleTarget, _ newState: Bool) -> Void)?
 
     private(set) var pendingToggles = PendingToggleTracker()
     var isShowingUnconfirmedFeedback: Bool { unconfirmed != nil }
@@ -212,6 +213,12 @@ final class ToggleConfirmation {
         }
     }
 
+    /// Fails the toggle waiting for `target`, if any, without waiting for its timeout.
+    func failPending(_ target: ToggleTarget, reason: String) {
+        guard let toggle = pendingToggles.pending[target] else { return }
+        fail(target, requestId: toggle.requestId, reason: reason)
+    }
+
     // A passive update that reaches the state the pending press expects is as good as a toggle_result.
     func handlePassiveUpdate(_ target: ToggleTarget, newState: Bool) {
         if let toggle = pendingToggles.resolvePassive(target, newState: newState) {
@@ -223,6 +230,7 @@ final class ToggleConfirmation {
     private func confirmed(_ target: ToggleTarget, _ toggle: PendingToggleTracker.Pending, source: String) {
         confirmationTimers.removeValue(forKey: target)?.cancel()
         logger.notice("Toggle \(target.rawValue, privacy: .public) confirmed by \(source, privacy: .public), request \(toggle.requestId, privacy: .public)")
+        onConfirmed?(target, toggle.expected)
     }
 
     private func fail(_ target: ToggleTarget, requestId: String, reason: String) {

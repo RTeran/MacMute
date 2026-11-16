@@ -30,6 +30,7 @@ private final class Harness {
     private(set) var timers: [FakeTimer] = []
     private(set) var feedbackStarts: [ToggleTarget] = []
     private(set) var feedbackEnds = 0
+    private(set) var confirmations: [(target: ToggleTarget, newState: Bool)] = []
     private var nextRequestNumber = 0
 
     lazy var confirmation: ToggleConfirmation = {
@@ -58,6 +59,9 @@ private final class Harness {
         }
         confirmation.onUnconfirmedFeedbackEnd = { [unowned self] in
             self.feedbackEnds += 1
+        }
+        confirmation.onConfirmed = { [unowned self] target, newState in
+            self.confirmations.append((target, newState))
         }
         return confirmation
     }()
@@ -239,6 +243,52 @@ final class ToggleConfirmationTests: XCTestCase {
 
         XCTAssertEqual(harness.feedbackStarts, [.mic])
         XCTAssertTrue(harness.confirmationTimer().isCancelled)
+    }
+
+    func testFailingThePendingToggleShowsFeedbackAtOnce() {
+        harness.confirmation.toggle(.mic)
+
+        harness.confirmation.failPending(.mic, reason: "helper_disconnected")
+
+        XCTAssertEqual(harness.feedbackStarts, [.mic])
+        XCTAssertTrue(harness.confirmationTimer().isCancelled)
+        XCTAssertNil(harness.confirmation.pendingToggles.pending[.mic])
+    }
+
+    func testFailingWithoutAPendingToggleDoesNothing() {
+        harness.confirmation.toggle(.camera)
+
+        harness.confirmation.failPending(.mic, reason: "helper_disconnected")
+
+        XCTAssertEqual(harness.feedbackStarts, [])
+        XCTAssertNotNil(harness.confirmation.pendingToggles.pending[.camera])
+    }
+
+    func testReportsAToggleConfirmedByItsResult() {
+        harness.confirmation.toggle(.mic)
+
+        harness.confirm(.mic, "r1", newState: true)
+
+        XCTAssertEqual(harness.confirmations.map(\.target), [.mic])
+        XCTAssertEqual(harness.confirmations.map(\.newState), [true])
+    }
+
+    func testReportsAToggleConfirmedByAPassiveUpdate() {
+        harness.confirmedCameraOff = true
+        harness.confirmation.toggle(.camera)
+
+        harness.confirmation.handlePassiveUpdate(.camera, newState: false)
+
+        XCTAssertEqual(harness.confirmations.map(\.target), [.camera])
+        XCTAssertEqual(harness.confirmations.map(\.newState), [false])
+    }
+
+    func testDoesNotReportAResultWithTheUnexpectedStateAsConfirmed() {
+        harness.confirmation.toggle(.mic)
+
+        harness.confirm(.mic, "r1", newState: false)
+
+        XCTAssertTrue(harness.confirmations.isEmpty)
     }
 
     func testSendWithoutClientShowsUnconfirmedFeedback() {
