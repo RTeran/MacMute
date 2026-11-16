@@ -410,6 +410,38 @@ final class PeerCodeVerifierTests: XCTestCase {
         XCTAssertEqual(result.failure, .peerIsDebuggable)
     }
 
+    func testAcceptsAnAdHocSignatureWithoutACertificate() {
+        XCTAssertNoThrow(try PeerCodeVerifier.signingModeCheck(staticFlags: adHocFlag | runtimeFlag, hasLeaf: false).get())
+    }
+
+    func testAcceptsACertificateSignatureThatIsNotAdHoc() {
+        XCTAssertNoThrow(try PeerCodeVerifier.signingModeCheck(staticFlags: runtimeFlag, hasLeaf: true).get())
+    }
+
+    func testRejectsASignatureThatIsNeitherAdHocNorHasACertificate() {
+        XCTAssertEqual(PeerCodeVerifier.signingModeCheck(staticFlags: runtimeFlag, hasLeaf: false).failure, .ownSigningModeInconsistent)
+    }
+
+    func testRejectsAnAdHocSignatureThatHasACertificate() {
+        XCTAssertEqual(PeerCodeVerifier.signingModeCheck(staticFlags: adHocFlag, hasLeaf: true).failure, .ownSigningModeInconsistent)
+    }
+
+    func testReadsTheStaticSigningFlags() {
+        let information: [String: Any] = [kSecCodeInfoFlags as String: NSNumber(value: adHocFlag)]
+
+        XCTAssertEqual(try PeerCodeVerifier.signingFlags(from: information).get(), adHocFlag)
+    }
+
+    func testRejectsMissingStaticSigningFlags() {
+        XCTAssertEqual(PeerCodeVerifier.signingFlags(from: [:]).failure, .securityCallReturnedNothing("kSecCodeInfoFlags"))
+    }
+
+    func testRejectsStaticSigningFlagsOfTheWrongType() {
+        let information: [String: Any] = [kSecCodeInfoFlags as String: "2"]
+
+        XCTAssertEqual(PeerCodeVerifier.signingFlags(from: information).failure, .securityCallReturnedNothing("kSecCodeInfoFlags"))
+    }
+
     func testRejectsAStatusOfTheWrongType() {
         let information: [String: Any] = [kSecCodeInfoStatus as String: "65536"]
 

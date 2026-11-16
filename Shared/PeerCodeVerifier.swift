@@ -16,6 +16,7 @@ enum PeerVerificationError: Error, Equatable, CustomStringConvertible {
     case notInsideAnApp
     case ownPathUnavailable(OSStatus)
     case securityCallReturnedNothing(String)
+    case ownSigningModeInconsistent
 
     var description: String {
         switch self {
@@ -46,6 +47,8 @@ enum PeerVerificationError: Error, Equatable, CustomStringConvertible {
             return "cannot read where this helper's code is (OSStatus \(status))"
         case let .securityCallReturnedNothing(function):
             return "\(function) reported success but returned nothing usable"
+        case .ownSigningModeInconsistent:
+            return "this app's signature is ad-hoc and has a certificate, or is neither, so its trust branch is unknown"
         }
     }
 }
@@ -57,8 +60,9 @@ struct TrustedPeer {
     let requiresHardenedRuntime: Bool
 }
 
-/// `leaf` was read together with the cdhash that the running code was checked against, so it
-/// describes the code the kernel loaded even if the bundle on disk is replaced afterwards.
+/// The cdhash pin binds the CodeDirectory (identifier, ad-hoc flag, team ID) to the running code.
+/// It does not bind `leaf`: the certificate chain sits in the CMS blob outside the cdhash, so it
+/// can be swapped on disk without changing the cdhash.
 struct OwnCode {
     let staticCode: SecStaticCode
     let leaf: SecCertificate?
@@ -115,7 +119,25 @@ enum PeerCodeVerifier {
         guard let cdhash = info[kSecCodeInfoUnique as String] as? Data, !cdhash.isEmpty else {
             return .failure(.securityCallReturnedNothing("kSecCodeInfoUnique"))
         }
-        return .success(SigningIdentity(cdhash: cdhash, leaf: (info[kSecCodeInfoCertificates as String] as? [SecCertificate])?.first))
+        let leaf = (info[kSecCodeInfoCertificates as String] as? [SecCertificate])?.first
+        return signingFlags(from: info)
+            .flatMap { signingModeCheck(staticFlags: $0, hasLeaf: leaf != nil) }
+            .map { SigningIdentity(cdhash: cdhash, leaf: leaf) }
+    }
+
+    /// These are the CodeDirectory flags, covered by the cdhash, unlike the live status flags.
+    static func signingFlags(from information: [String: Any]) -> Result<UInt32, PeerVerificationError> {
+        guard let flags = information[kSecCodeInfoFlags as String] as? NSNumber else {
+            return .failure(.securityCallReturnedNothing("kSecCodeInfoFlags"))
+        }
+        return .success(flags.uint32Value)
+    }
+
+    /// A certificate list that came back empty or of an unexpected type must not send signed
+    /// code down the ad-hoc branch, which trusts the peer without the hardened runtime.
+    static func signingModeCheck(staticFlags: UInt32, hasLeaf: Bool) -> Result<Void, PeerVerificationError> {
+        let isAdHoc = staticFlags & SecCodeSignatureFlags.adhoc.rawValue != 0
+        return isAdHoc == !hasLeaf ? .success(()) : .failure(.ownSigningModeInconsistent)
     }
 
     /// With a certificate, the helper must carry `helperIdentifier` and be signed by the same leaf
