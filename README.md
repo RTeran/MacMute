@@ -120,7 +120,7 @@ A program that runs as your user can start the real helper itself and send fake 
 
 The same kind of program could create the app's socket, `~/Library/Application Support/MacMute/macmute.sock`, and then start the real app inside its own process (fork, then exec). It is not verified whether the helper would accept that app. This risk is also accepted.
 
-The app and the helper only accept each other from this release on. v1.0 is not signed with the MacMute certificate (it is ad-hoc), and v1.1 runs without the hardened runtime, so the new app and helper reject both. Do not mix versions: run only the latest MacMute.
+The app and the helper only accept each other from this release on. v1.0 is not signed with the MacMute certificate (it is ad-hoc), and v1.1 is signed with the old certificate and runs without the hardened runtime, so the new app and helper reject both. Do not mix versions: run only the latest MacMute.
 
 ## Development
 
@@ -155,7 +155,7 @@ xcodebuild -project MacMute.xcodeproj -scheme MacMute build
 
 Releases are signed with a self-signed certificate named `MacMute Code Signing 2026`. It is not trusted by Apple, so Gatekeeper still asks users to allow the app once, but its identity stays the same between releases and macOS keeps the Accessibility and Microphone permissions. Releases signed with a different certificate make every user grant the permissions again, so keep a backup of it. Releases up to 1.1 used an older certificate named `MacMute Code Signing`; it can stay in the keychain, but do not sign with it.
 
-To create the certificate, open Keychain Access and choose **Certificate Assistant → Create a Certificate…**. Use the name `MacMute Code Signing 2026`, identity type **Self Signed Root**, certificate type **Code Signing**, and tick **Let me override defaults**: validity 3650 days, RSA 2048-bit key, Key Usage **Signature** (critical), Extended Key Usage **Code Signing** (critical), Basic Constraints not a certificate authority, keychain **login**. Then print its SHA-1, which goes in lowercase into `LEAF_PIN`:
+To create the certificate, open Keychain Access (`open -a "Keychain Access"`) and choose **Certificate Assistant → Create a Certificate…**. Use the name `MacMute Code Signing 2026`, identity type **Self Signed Root**, certificate type **Code Signing**, and tick **Let me override defaults**: validity 3650 days, RSA 2048-bit key, Key Usage **Signature** (critical), Extended Key Usage **Code Signing** (critical), Basic Constraints not a certificate authority, keychain **login**. Leave the email, country and every other subject field empty, so that only the Common Name is set: the certificate is embedded in every release, so anything in it is public. Then print its SHA-1, which goes in lowercase into `LEAF_PIN`:
 
 ```bash
 security find-identity -p codesigning | grep '"MacMute Code Signing 2026"'
