@@ -2,3 +2,6 @@
 xcuserdata/
 build/
 dist/
+
+# Extension signing keys stay outside the repo
+*.pem

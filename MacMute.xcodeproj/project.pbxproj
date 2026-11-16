@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A1000115 /* NativeMessagingHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000100 /* NativeMessagingHostTests.swift */; };
+		A1000113 /* NativeMessagingHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000099 /* NativeMessagingHost.swift */; };
+		A1000114 /* NativeMessagingHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000099 /* NativeMessagingHost.swift */; };
 		A1000111 /* HelperLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000098 /* HelperLog.swift */; };
 		A1000112 /* HelperLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000098 /* HelperLog.swift */; };
 		A1000107 /* SocketClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000097 /* SocketClientTests.swift */; };
@@ -92,6 +95,8 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A2000100 /* NativeMessagingHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeMessagingHostTests.swift; sourceTree = "<group>"; };
+		A2000099 /* NativeMessagingHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeMessagingHost.swift; sourceTree = "<group>"; };
 		A2000098 /* HelperLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelperLog.swift; sourceTree = "<group>"; };
 		A2000097 /* SocketClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocketClientTests.swift; sourceTree = "<group>"; };
 		A2000096 /* SocketClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocketClient.swift; sourceTree = "<group>"; };
@@ -189,6 +194,7 @@
 				A2000080 /* CallRouter.swift */,
 				A2000088 /* ChromeConnectionStatus.swift */,
 				A2000090 /* HelperExecutable.swift */,
+				A2000099 /* NativeMessagingHost.swift */,
 				A2000082 /* MuteStateCoordinator.swift */,
 				A2000011 /* main.swift */,
 				A2000009 /* Info.plist */,
@@ -242,6 +248,7 @@
 				A2000085 /* LogPreviewTests.swift */,
 				A2000089 /* ChromeConnectionStatusTests.swift */,
 				A2000091 /* HelperExecutableTests.swift */,
+				A2000100 /* NativeMessagingHostTests.swift */,
 				A2000093 /* NativeMessageReaderTests.swift */,
 				A2000095 /* RetryBackoffTests.swift */,
 				A2000097 /* SocketClientTests.swift */,
@@ -356,6 +363,7 @@
 				A1000086 /* LogPreview.swift in Sources */,
 				A1000092 /* ChromeConnectionStatus.swift in Sources */,
 				A1000095 /* HelperExecutable.swift in Sources */,
+				A1000113 /* NativeMessagingHost.swift in Sources */,
 				A1000089 /* PeerCodeVerifier.swift in Sources */,
 				A1000083 /* MuteStateCoordinator.swift in Sources */,
 				A1000009 /* main.swift in Sources */,
@@ -399,7 +407,9 @@
 				A1000093 /* ChromeConnectionStatus.swift in Sources */,
 				A1000094 /* ChromeConnectionStatusTests.swift in Sources */,
 				A1000096 /* HelperExecutable.swift in Sources */,
+				A1000114 /* NativeMessagingHost.swift in Sources */,
 				A1000097 /* HelperExecutableTests.swift in Sources */,
+				A1000115 /* NativeMessagingHostTests.swift in Sources */,
 				A1000099 /* NativeMessageReader.swift in Sources */,
 				A1000100 /* NativeMessageReaderTests.swift in Sources */,
 				A1000104 /* RetryBackoffTests.swift in Sources */,
