@@ -12,9 +12,20 @@ xcodebuild -project MacMute.xcodeproj -scheme MacMute -configuration Release \
   -derivedDataPath "$BUILD" ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO clean build -quiet
 
 # Re-sign with a stable identity so macOS keeps the Accessibility permission across updates.
-codesign --force --sign "$IDENTITY" --identifier com.macmute.helper "$APP/Contents/Resources/MacMuteHelper"
-codesign --force --sign "$IDENTITY" --entitlements MacMute/MacMute.entitlements "$APP"
+codesign --force --sign "$IDENTITY" --options runtime --identifier com.macmute.helper "$APP/Contents/Resources/MacMuteHelper"
+codesign --force --sign "$IDENTITY" --options runtime --entitlements MacMute/MacMute.entitlements "$APP"
 codesign --verify --deep --strict "$APP"
+
+require_hardened_runtime() {
+  local details
+  details="$(codesign -dv "$1" 2>&1)"
+  if ! grep -Eq '^CodeDirectory .*flags=0x[0-9a-f]+\([^)]*runtime' <<<"$details"; then
+    echo "error: $1 is not signed with the hardened runtime" >&2
+    exit 1
+  fi
+}
+require_hardened_runtime "$APP/Contents/Resources/MacMuteHelper"
+require_hardened_runtime "$APP"
 
 rm -rf "$DIST" && mkdir -p "$DIST"
 ditto -c -k --keepParent "$APP" "$DIST/MacMute-app.zip"
