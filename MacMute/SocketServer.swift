@@ -243,7 +243,7 @@ class SocketServer {
             for messageData in lines {
                 guard let json = try? JSONSerialization.jsonObject(with: messageData) as? [String: Any] else {
                     let text = preview(String(decoding: messageData, as: UTF8.self))
-                    self.logger.error("Dropping undecodable message from helper \(id, privacy: .public): \(text, privacy: .public)")
+                    self.logger.error("Dropping undecodable message from helper \(id, privacy: .public) (\(messageData.count, privacy: .public) bytes): \(text, privacy: .public)")
                     continue
                 }
                 DispatchQueue.main.async {
