@@ -37,10 +37,43 @@ require_pin_matches_identity "$IDENTITY" "$LEAF_PIN"
 xcodebuild -project MacMute.xcodeproj -scheme MacMute -configuration Release \
   -derivedDataPath "$BUILD" ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO MACMUTE_LEAF_PIN="$LEAF_PIN" clean build -quiet
 
+HELPER="$APP/Contents/Resources/MacMuteHelper"
+
 # Re-sign with a stable identity so macOS keeps the Accessibility permission across updates.
-codesign --force --sign "$IDENTITY" --options runtime --identifier com.macmute.helper "$APP/Contents/Resources/MacMuteHelper"
-codesign --force --sign "$IDENTITY" --options runtime --entitlements MacMute/MacMute.entitlements "$APP"
+# A name picks by identity preference or by a substring of the common name; the hash picks exactly one certificate.
+codesign --force --sign "$LEAF_PIN" --options runtime --identifier com.macmute.helper "$HELPER"
+codesign --force --sign "$LEAF_PIN" --options runtime --entitlements MacMute/MacMute.entitlements "$APP"
 codesign --verify --deep --strict "$APP"
+
+require_signed_by_pin() {
+  local certificates leaf
+  certificates="$(mktemp -d)"
+  codesign -d --extract-certificates="$certificates/c" "$1" 2>/dev/null || true
+  leaf="$(shasum -a 1 "$certificates/c0" 2>/dev/null | cut -d ' ' -f 1)" || true
+  rm -rf "$certificates"
+  if [[ "$leaf" != "$2" ]]; then
+    echo "error: $1 is not signed by the certificate with SHA-1 $2" >&2
+    exit 1
+  fi
+}
+
+# An empty pin would ship a signed release that trusts whatever certificate its own signature carries.
+require_embedded_pins() {
+  local app_pin
+  app_pin="$(plutil -extract MacMuteLeafPin raw -o - "$1/Contents/Info.plist" 2>/dev/null)" || true
+  if [[ "$app_pin" != "$3" ]]; then
+    echo "error: the Info.plist of $1 does not pin $3" >&2
+    exit 1
+  fi
+  if ! launchctl plist __TEXT,__info_plist "$2" 2>/dev/null | grep -qxF "	\"MacMuteLeafPin\" = \"$3\";"; then
+    echo "error: the embedded Info.plist of $2 does not pin $3" >&2
+    exit 1
+  fi
+}
+
+require_signed_by_pin "$HELPER" "$LEAF_PIN"
+require_signed_by_pin "$APP" "$LEAF_PIN"
+require_embedded_pins "$APP" "$HELPER" "$LEAF_PIN"
 
 require_hardened_runtime() {
   local details
@@ -89,7 +122,7 @@ require_readable_entitlements() {
   fi
 }
 
-for code in "$APP/Contents/Resources/MacMuteHelper" "$APP"; do
+for code in "$HELPER" "$APP"; do
   require_hardened_runtime "$code"
   reject_unsafe_entitlements "$code"
 done
