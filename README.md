@@ -85,7 +85,14 @@ One time only: if you loaded the extension before it had a fixed ID, its ID chan
 3. Replace the contents of your `MacMute-chrome-extension` folder with the new ones and click reload in `chrome://extensions`.
 4. Reload the Meet tab.
 
-Since 1.1, every release is signed with the same certificate, so macOS keeps the Accessibility permission after an update. When you update from 1.0, grant it once more: if the shortcuts stop working, remove MacMute from the Accessibility list and add it again.
+Releases after 1.1 are signed with a new certificate, so macOS treats them as a different app and you must grant **Accessibility** and **Microphone** again, once. This is on purpose: older releases have no hardened runtime, and another program running as your user could put one of them back and inject code into it. The old grants must not stay with them. When you update from 1.1 or older, quit MacMute and remove its old permissions before you open the new version:
+
+```bash
+tccutil reset Accessibility com.macmute.app
+tccutil reset Microphone com.macmute.app
+```
+
+Then open the new MacMute and grant both permissions when asked. Later releases keep the same certificate, so macOS keeps the permissions after an update.
 
 ### Uninstall
 
@@ -146,12 +153,18 @@ xcodebuild -project MacMute.xcodeproj -scheme MacMute build
 
 ### Publish a release
 
-Releases are signed with a self-signed certificate named `MacMute Code Signing`. It is not trusted by Apple, so Gatekeeper still asks users to allow the app once, but its identity stays the same between releases and macOS keeps the Accessibility permission. Releases signed with a different certificate make every user grant the permission again, so keep a backup of it.
+Releases are signed with a self-signed certificate named `MacMute Code Signing 2026`. It is not trusted by Apple, so Gatekeeper still asks users to allow the app once, but its identity stays the same between releases and macOS keeps the Accessibility and Microphone permissions. Releases signed with a different certificate make every user grant the permissions again, so keep a backup of it. Releases up to 1.1 used an older certificate named `MacMute Code Signing`; it can stay in the keychain, but do not sign with it.
 
-The certificate must be in your login keychain. To use it on another Mac, import the backup `.p12` file:
+To create the certificate, open Keychain Access and choose **Certificate Assistant → Create a Certificate…**. Use the name `MacMute Code Signing 2026`, identity type **Self Signed Root**, certificate type **Code Signing**, and tick **Let me override defaults**: validity 3650 days, RSA 2048-bit key, Key Usage **Signature** (critical), Extended Key Usage **Code Signing** (critical), Basic Constraints not a certificate authority, keychain **login**. Then print its SHA-1, which goes in lowercase into `LEAF_PIN`:
 
 ```bash
-security import MacMute-signing.p12 -k ~/Library/Keychains/login.keychain-db -T /usr/bin/codesign
+security find-identity -p codesigning | grep '"MacMute Code Signing 2026"'
+```
+
+Export it with its key as a `.p12` file and keep the backup off the Mac. The certificate must be in your login keychain. To use it on another Mac, import the backup:
+
+```bash
+security import MacMute-signing-2026.p12 -k ~/Library/Keychains/login.keychain-db -T /usr/bin/codesign
 ```
 
 Build a universal app, sign it and package both downloads into `dist/`:
