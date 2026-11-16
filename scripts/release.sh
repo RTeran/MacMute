@@ -8,7 +8,7 @@ DIST="$ROOT/dist"
 APP="$BUILD/Build/Products/Release/MacMute.app"
 # SHA-1 of the signing certificate. The app and the helper trust no peer unless their own
 # certificate has this hash, so a new certificate needs a new value here.
-LEAF_PIN="ea0ccfd73df5b789344b9dfcb73d985c8be24e20"
+LEAF_PIN="0ccd508916a1b2a377ee3718b8315a7bae324c52"
 
 # The identity is self-signed, so `find-identity -v` hides it; a trusted one is listed twice.
 identity_sha1s() {

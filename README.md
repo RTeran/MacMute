@@ -59,7 +59,7 @@ The folder name does not matter. Load only one copy of the extension in each Chr
    codesign -dr - /Applications/MacMute.app
    ```
 
-   The output must contain `H"ea0ccfd73df5b789344b9dfcb73d985c8be24e20"`, the hash of the MacMute certificate. If it does not, delete the app and do not open it.
+   The output must contain `H"0ccd508916a1b2a377ee3718b8315a7bae324c52"`, the hash of the MacMute certificate. If it does not, delete the app and do not open it.
 3. Open it once. The app is not notarized by Apple, so macOS blocks it the first time with a message like *"MacMute" cannot be opened* or *Apple could not verify "MacMute"*. Open **System Settings → Privacy & Security**, scroll down to the message about MacMute and click **Open Anyway**. Then open the app again.
 
    If **Open Anyway** does not appear, and only after the checks above passed, remove the quarantine flag instead:
