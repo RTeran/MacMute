@@ -12,6 +12,7 @@ enum PeerVerificationError: Error, Equatable, CustomStringConvertible {
     case requirementNotSatisfied(OSStatus)
     case peerStatusUnavailable(OSStatus)
     case peerWithoutHardenedRuntime
+    case peerIsDebuggable
     case notInsideAnApp
     case ownPathUnavailable(OSStatus)
     case ownSigningModeMismatch(runningAdHoc: Bool)
@@ -38,6 +39,8 @@ enum PeerVerificationError: Error, Equatable, CustomStringConvertible {
             return "cannot read the peer's runtime status (OSStatus \(status))"
         case .peerWithoutHardenedRuntime:
             return "the peer runs without the hardened runtime, so other code could be injected into it"
+        case .peerIsDebuggable:
+            return "the peer allows a debugger or has one attached, so other code could control it"
         case .notInsideAnApp:
             return "the helper is not in the Contents/Resources folder of an app"
         case let .ownPathUnavailable(status):
@@ -192,9 +195,14 @@ enum PeerCodeVerifier {
         }
     }
 
+    // CS_GET_TASK_ALLOW and CS_DEBUGGED from the kernel's cs_blobs.h, which has no SDK constant.
+    static let getTaskAllowFlag: UInt32 = 0x0000_0004
+    static let debuggedFlag: UInt32 = 0x1000_0000
+
     static func hardenedRuntimeCheck(codeStatus: UInt32, required: Bool) -> Result<Void, PeerVerificationError> {
         guard required else { return .success(()) }
         guard codeStatus & SecCodeSignatureFlags.runtime.rawValue != 0 else { return .failure(.peerWithoutHardenedRuntime) }
+        guard codeStatus & (getTaskAllowFlag | debuggedFlag) == 0 else { return .failure(.peerIsDebuggable) }
         return .success(())
     }
 

@@ -372,6 +372,34 @@ final class PeerCodeVerifierTests: XCTestCase {
         XCTAssertNoThrow(try result.get())
     }
 
+    func testRejectsAPeerThatAllowsADebuggerWhenTheHardenedRuntimeIsRequired() {
+        let result = PeerCodeVerifier.hardenedRuntimeCheck(codeStatus: runtimeFlag | PeerCodeVerifier.getTaskAllowFlag, required: true)
+
+        XCTAssertEqual(result.failure, .peerIsDebuggable)
+    }
+
+    func testRejectsAPeerWithADebuggerAttachedWhenTheHardenedRuntimeIsRequired() {
+        let result = PeerCodeVerifier.hardenedRuntimeCheck(codeStatus: runtimeFlag | PeerCodeVerifier.debuggedFlag, required: true)
+
+        XCTAssertEqual(result.failure, .peerIsDebuggable)
+    }
+
+    func testReportsAMissingHardenedRuntimeBeforeADebuggablePeer() {
+        let result = PeerCodeVerifier.hardenedRuntimeCheck(codeStatus: PeerCodeVerifier.getTaskAllowFlag, required: true)
+
+        XCTAssertEqual(result.failure, .peerWithoutHardenedRuntime)
+    }
+
+    func testIgnoresDebuggableFlagsWhenTheHardenedRuntimeIsNotRequired() {
+        let status = PeerCodeVerifier.getTaskAllowFlag | PeerCodeVerifier.debuggedFlag
+
+        XCTAssertNoThrow(try PeerCodeVerifier.hardenedRuntimeCheck(codeStatus: status, required: false).get())
+    }
+
+    func testDescribesADebuggablePeer() {
+        XCTAssertTrue(PeerVerificationError.peerIsDebuggable.description.contains("debugger"))
+    }
+
     func testReportsThePeerProcessId() {
         XCTAssertEqual(PeerCodeVerifier.peerProcessID(of: sockets[0]), getpid())
     }
