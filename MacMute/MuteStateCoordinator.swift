@@ -150,7 +150,6 @@ final class MuteStateCoordinator {
         }
     }
 
-    // An unknown state shows as not active: a false "muted" while the mic is live is the dangerous error.
     private func updateChromeConnection() {
         let connected = router.hasHelpers
         guard connected != isConnectedToChrome else { return }
@@ -158,6 +157,7 @@ final class MuteStateCoordinator {
         onChromeConnectionChange?(connected)
     }
 
+    // An unknown state shows as not active: a false "muted" while the mic is live is the dangerous error.
     private func refreshDisplay() {
         let profile = router.selected.flatMap(router.profile) ?? CallRouter.Profile()
         for target in [ToggleTarget.mic, .camera] {
