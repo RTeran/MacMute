@@ -2,10 +2,24 @@
 // Detects and controls the mute button and camera button in Google Meet
 
 (function () {
-  // Re-injection guard: Chrome may inject this script multiple times per tab.
-  // Using window (page global) ensures the guard persists across re-injections.
-  if (window.__macMuteLoaded) return;
-  window.__macMuteLoaded = true;
+  // Chrome may inject this script several times per tab, and the marker on window outlives an
+  // extension reload. The instance left behind then has a dead extension context and can no
+  // longer receive messages, so a new injection replaces it instead of bowing out.
+  const loadedInstance = window.__macMuteLoaded;
+  if (loadedInstance?.isAlive?.()) return;
+  loadedInstance?.teardown?.();
+
+  // Captured at load: after a reload this object belongs to the dead context and loses its id.
+  const extensionRuntime = chrome.runtime;
+  window.__macMuteLoaded = { isAlive: isExtensionAlive, teardown };
+
+  function isExtensionAlive() {
+    try {
+      return Boolean(extensionRuntime?.id);
+    } catch {
+      return false;
+    }
+  }
 
   let currentMuteState = null;
   let currentCameraState = null;
@@ -276,7 +290,7 @@
   }
 
   // Listen for messages from background script
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  function handleExtensionMessage(message, sender, sendResponse) {
     switch (message.type) {
       case "toggle":
         respondWith(toggleMute(), sendResponse);
@@ -303,7 +317,9 @@
         break;
     }
     return false;
-  });
+  }
+
+  chrome.runtime.onMessage.addListener(handleExtensionMessage);
 
   function isMediaSessionMessage(event) {
     const data = event.data;
@@ -323,7 +339,7 @@
   // Meet also calls the Media Session outside our toggles (lobby, leaving, device loss), so a
   // signal only confirms a pending toggle, or one that just timed out, and is never reported to
   // the app on its own.
-  window.addEventListener("message", (event) => {
+  function handleMediaSessionMessage(event) {
     if (!isMediaSessionMessage(event)) return;
     const { kind, active } = event.data;
     const state = stateFromMediaSession[kind](active);
@@ -346,7 +362,9 @@
       console.debug(`MacMute: late media session ${kind} change after timeout, reporting ${state}`);
       reportState(kind, state);
     }
-  });
+  }
+
+  window.addEventListener("message", handleMediaSessionMessage);
 
   function queriedState(target, readState) {
     const mediaSessionState = mediaSessionSinceVisible[target];
@@ -366,11 +384,13 @@
     }
   }
 
-  document.addEventListener("visibilitychange", () => {
+  function handleVisibilityChange() {
     if (document.visibilityState !== "visible") return;
     mediaSessionSinceVisible.mic = undefined;
     mediaSessionSinceVisible.camera = undefined;
-  });
+  }
+
+  document.addEventListener("visibilitychange", handleVisibilityChange);
 
   function reportDomState(target, state) {
     if (state === null) return;
@@ -435,6 +455,21 @@
     startObserving();
   } else {
     document.addEventListener("DOMContentLoaded", startObserving);
+  }
+
+  function teardown() {
+    observer.disconnect();
+    cancelStateReport();
+    stopLateWait("mic");
+    stopLateWait("camera");
+    window.removeEventListener("message", handleMediaSessionMessage);
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
+    document.removeEventListener("DOMContentLoaded", startObserving);
+    try {
+      chrome.runtime.onMessage.removeListener(handleExtensionMessage);
+    } catch {
+      // The extension API of an orphaned instance may already be gone.
+    }
   }
 
   console.log("MacMute: Content script loaded on", window.location.href);

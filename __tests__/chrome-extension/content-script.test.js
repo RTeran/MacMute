@@ -6,9 +6,11 @@ beforeAll(() => {
 
   global.chrome = {
     runtime: {
+      id: "macmute-test",
       sendMessage: jest.fn(),
       onMessage: {
         addListener: jest.fn(),
+        removeListener: jest.fn(),
       },
     },
   };
@@ -896,22 +898,91 @@ describe("message listener — camera", () => {
 // Re-injection guard
 // ---------------------------------------------------------------------------
 describe("re-injection guard (window.__macMuteLoaded)", () => {
-  test("window.__macMuteLoaded is true after first load", () => {
-    expect(window.__macMuteLoaded).toBe(true);
+  let loadedMarker;
+
+  beforeEach(() => {
+    loadedMarker = window.__macMuteLoaded;
   });
 
-  test("re-requiring with guard set does not re-register chrome listeners", () => {
-    const callsBefore =
-      chrome.runtime.onMessage.addListener.mock.calls.length;
+  afterEach(() => {
+    chrome.runtime.id = "macmute-test";
+    window.__macMuteLoaded = loadedMarker;
+  });
 
-    // Simulate a second injection: clear module cache but keep the guard
-    jest.resetModules();
-    // Do NOT delete window.__macMuteLoaded — the guard should prevent execution
-    require("../../chrome-extension/content-script");
+  function injectAgain() {
+    jest.isolateModules(() => {
+      require("../../chrome-extension/content-script");
+    });
+    return window.__macMuteLoaded;
+  }
 
-    const callsAfter =
-      chrome.runtime.onMessage.addListener.mock.calls.length;
-    expect(callsAfter).toBe(callsBefore);
+  test("the loaded instance reports itself alive while its extension context is valid", () => {
+    expect(window.__macMuteLoaded.isAlive()).toBe(true);
+  });
+
+  test("the loaded instance reports itself dead once its extension context is invalidated", () => {
+    delete chrome.runtime.id;
+
+    expect(window.__macMuteLoaded.isAlive()).toBe(false);
+  });
+
+  test("a new injection stays out while the loaded instance is alive", () => {
+    const alive = { isAlive: () => true, teardown: jest.fn() };
+    window.__macMuteLoaded = alive;
+
+    injectAgain();
+
+    expect(chrome.runtime.onMessage.addListener).not.toHaveBeenCalled();
+    expect(alive.teardown).not.toHaveBeenCalled();
+    expect(window.__macMuteLoaded).toBe(alive);
+  });
+
+  test("a new injection tears down an orphaned instance and takes its place", () => {
+    const orphan = { isAlive: () => false, teardown: jest.fn() };
+    window.__macMuteLoaded = orphan;
+
+    const replacement = injectAgain();
+    replacement.teardown();
+
+    expect(orphan.teardown).toHaveBeenCalledTimes(1);
+    expect(chrome.runtime.onMessage.addListener).toHaveBeenCalledTimes(1);
+    expect(replacement).not.toBe(orphan);
+  });
+
+  test("a new injection takes the place of a marker left by an older version", () => {
+    window.__macMuteLoaded = true;
+
+    const replacement = injectAgain();
+    replacement.teardown();
+
+    expect(chrome.runtime.onMessage.addListener).toHaveBeenCalledTimes(1);
+  });
+
+  test("teardown stops observing the page and listening for messages", () => {
+    window.__macMuteLoaded = { isAlive: () => false, teardown: () => {} };
+    const observerStub = stubMutationObserver();
+    let instance;
+    try {
+      instance = injectAgain();
+    } finally {
+      observerStub.restore();
+    }
+    const messageHandler = chrome.runtime.onMessage.addListener.mock.calls[0][0];
+
+    instance.teardown();
+
+    expect(observerStub.instances[0].disconnect).toHaveBeenCalled();
+    expect(chrome.runtime.onMessage.removeListener).toHaveBeenCalledWith(messageHandler);
+  });
+
+  test("teardown still completes when the extension API is gone", () => {
+    window.__macMuteLoaded = { isAlive: () => false, teardown: () => {} };
+    const instance = injectAgain();
+    chrome.runtime.onMessage.removeListener.mockImplementationOnce(() => {
+      throw new Error("Extension context invalidated.");
+    });
+
+    expect(() => instance.teardown()).not.toThrow();
   });
 });
 
