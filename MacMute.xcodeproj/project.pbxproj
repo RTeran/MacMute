@@ -29,6 +29,27 @@
 		A1000056 /* UnconfirmedFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000053 /* UnconfirmedFeedback.swift */; };
 		A1000057 /* UnconfirmedFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000053 /* UnconfirmedFeedback.swift */; };
 		A1000058 /* UnconfirmedFeedbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000054 /* UnconfirmedFeedbackTests.swift */; };
+		A1000070 /* LineFramer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000070 /* LineFramer.swift */; };
+		A1000071 /* LineFramer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000070 /* LineFramer.swift */; };
+		A1000072 /* LineFramerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000071 /* LineFramerTests.swift */; };
+		A1000080 /* CallRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000080 /* CallRouter.swift */; };
+		A1000081 /* CallRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000080 /* CallRouter.swift */; };
+		A1000082 /* CallRouterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000081 /* CallRouterTests.swift */; };
+		A1000086 /* LogPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000084 /* LogPreview.swift */; };
+		A1000087 /* LogPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000084 /* LogPreview.swift */; };
+		A1000088 /* LogPreviewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000085 /* LogPreviewTests.swift */; };
+		A1000092 /* ChromeConnectionStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000088 /* ChromeConnectionStatus.swift */; };
+		A1000093 /* ChromeConnectionStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000088 /* ChromeConnectionStatus.swift */; };
+		A1000094 /* ChromeConnectionStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000089 /* ChromeConnectionStatusTests.swift */; };
+		A1000095 /* HelperExecutable.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000090 /* HelperExecutable.swift */; };
+		A1000096 /* HelperExecutable.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000090 /* HelperExecutable.swift */; };
+		A1000097 /* HelperExecutableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000091 /* HelperExecutableTests.swift */; };
+		A1000089 /* PeerCodeVerifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000086 /* PeerCodeVerifier.swift */; };
+		A1000090 /* PeerCodeVerifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000086 /* PeerCodeVerifier.swift */; };
+		A1000091 /* PeerCodeVerifierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000087 /* PeerCodeVerifierTests.swift */; };
+		A1000083 /* MuteStateCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000082 /* MuteStateCoordinator.swift */; };
+		A1000084 /* MuteStateCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000082 /* MuteStateCoordinator.swift */; };
+		A1000085 /* MuteStateCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000083 /* MuteStateCoordinatorTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -77,6 +98,20 @@
 		A2000052 /* ShortcutMatcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutMatcherTests.swift; sourceTree = "<group>"; };
 		A2000053 /* UnconfirmedFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnconfirmedFeedback.swift; sourceTree = "<group>"; };
 		A2000054 /* UnconfirmedFeedbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnconfirmedFeedbackTests.swift; sourceTree = "<group>"; };
+		A2000070 /* LineFramer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineFramer.swift; sourceTree = "<group>"; };
+		A2000071 /* LineFramerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineFramerTests.swift; sourceTree = "<group>"; };
+		A2000080 /* CallRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallRouter.swift; sourceTree = "<group>"; };
+		A2000081 /* CallRouterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallRouterTests.swift; sourceTree = "<group>"; };
+		A2000084 /* LogPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogPreview.swift; sourceTree = "<group>"; };
+		A2000085 /* LogPreviewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogPreviewTests.swift; sourceTree = "<group>"; };
+		A2000088 /* ChromeConnectionStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeConnectionStatus.swift; sourceTree = "<group>"; };
+		A2000089 /* ChromeConnectionStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeConnectionStatusTests.swift; sourceTree = "<group>"; };
+		A2000090 /* HelperExecutable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelperExecutable.swift; sourceTree = "<group>"; };
+		A2000091 /* HelperExecutableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelperExecutableTests.swift; sourceTree = "<group>"; };
+		A2000086 /* PeerCodeVerifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerCodeVerifier.swift; sourceTree = "<group>"; };
+		A2000087 /* PeerCodeVerifierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerCodeVerifierTests.swift; sourceTree = "<group>"; };
+		A2000082 /* MuteStateCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuteStateCoordinator.swift; sourceTree = "<group>"; };
+		A2000083 /* MuteStateCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuteStateCoordinatorTests.swift; sourceTree = "<group>"; };
 		A3000030 /* MacMuteTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MacMuteTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -110,6 +145,7 @@
 			children = (
 				A6000002 /* MacMute */,
 				A6000003 /* MacMuteHelper */,
+				A6000010 /* Shared */,
 				A6000005 /* MacMuteTests */,
 				A6000004 /* Products */,
 			);
@@ -128,6 +164,11 @@
 				A2000008 /* MuteStateManager.swift */,
 				A2000012 /* ToggleConfirmation.swift */,
 				A2000053 /* UnconfirmedFeedback.swift */,
+				A2000080 /* CallRouter.swift */,
+				A2000084 /* LogPreview.swift */,
+				A2000088 /* ChromeConnectionStatus.swift */,
+				A2000090 /* HelperExecutable.swift */,
+				A2000082 /* MuteStateCoordinator.swift */,
 				A2000011 /* main.swift */,
 				A2000009 /* Info.plist */,
 				A2000010 /* MacMute.entitlements */,
@@ -142,6 +183,15 @@
 				A2000020 /* main.swift */,
 			);
 			path = MacMuteHelper;
+			sourceTree = "<group>";
+		};
+		A6000010 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				A2000070 /* LineFramer.swift */,
+				A2000086 /* PeerCodeVerifier.swift */,
+			);
+			path = Shared;
 			sourceTree = "<group>";
 		};
 		A6000004 /* Products */ = {
@@ -161,6 +211,13 @@
 				A2000051 /* SocketServerTests.swift */,
 				A2000052 /* ShortcutMatcherTests.swift */,
 				A2000054 /* UnconfirmedFeedbackTests.swift */,
+				A2000071 /* LineFramerTests.swift */,
+				A2000081 /* CallRouterTests.swift */,
+				A2000085 /* LogPreviewTests.swift */,
+				A2000089 /* ChromeConnectionStatusTests.swift */,
+				A2000091 /* HelperExecutableTests.swift */,
+				A2000087 /* PeerCodeVerifierTests.swift */,
+				A2000083 /* MuteStateCoordinatorTests.swift */,
 			);
 			path = MacMuteTests;
 			sourceTree = "<group>";
@@ -264,6 +321,13 @@
 				A1000008 /* MuteStateManager.swift in Sources */,
 				A1000010 /* ToggleConfirmation.swift in Sources */,
 				A1000056 /* UnconfirmedFeedback.swift in Sources */,
+				A1000070 /* LineFramer.swift in Sources */,
+				A1000080 /* CallRouter.swift in Sources */,
+				A1000086 /* LogPreview.swift in Sources */,
+				A1000092 /* ChromeConnectionStatus.swift in Sources */,
+				A1000095 /* HelperExecutable.swift in Sources */,
+				A1000089 /* PeerCodeVerifier.swift in Sources */,
+				A1000083 /* MuteStateCoordinator.swift in Sources */,
 				A1000009 /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -288,6 +352,20 @@
 				A1000055 /* ShortcutMatcherTests.swift in Sources */,
 				A1000057 /* UnconfirmedFeedback.swift in Sources */,
 				A1000058 /* UnconfirmedFeedbackTests.swift in Sources */,
+				A1000071 /* LineFramer.swift in Sources */,
+				A1000072 /* LineFramerTests.swift in Sources */,
+				A1000081 /* CallRouter.swift in Sources */,
+				A1000082 /* CallRouterTests.swift in Sources */,
+				A1000087 /* LogPreview.swift in Sources */,
+				A1000088 /* LogPreviewTests.swift in Sources */,
+				A1000093 /* ChromeConnectionStatus.swift in Sources */,
+				A1000094 /* ChromeConnectionStatusTests.swift in Sources */,
+				A1000096 /* HelperExecutable.swift in Sources */,
+				A1000097 /* HelperExecutableTests.swift in Sources */,
+				A1000090 /* PeerCodeVerifier.swift in Sources */,
+				A1000091 /* PeerCodeVerifierTests.swift in Sources */,
+				A1000084 /* MuteStateCoordinator.swift in Sources */,
+				A1000085 /* MuteStateCoordinatorTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -418,6 +496,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
+				OTHER_CODE_SIGN_FLAGS = "--identifier com.macmute.helper";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
 			};
@@ -427,6 +506,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
+				OTHER_CODE_SIGN_FLAGS = "--identifier com.macmute.helper";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
 			};

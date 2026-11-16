@@ -1,0 +1,174 @@
+import Foundation
+import os
+
+struct DisplayedMuteState: Equatable {
+    var isMuted = false
+    var isCameraOff = false
+
+    subscript(target: ToggleTarget) -> Bool {
+        get { target == .mic ? isMuted : isCameraOff }
+        set {
+            if target == .mic { isMuted = newValue } else { isCameraOff = newValue }
+        }
+    }
+}
+
+/// Turns helper messages and shortcut presses into the state the indicator shows. Free of AppKit
+/// so it can be tested; runs on the main queue in the app.
+final class MuteStateCoordinator {
+    typealias Send = (
+        _ message: [String: Any], _ helper: ClientID, _ completion: @escaping (Result<Void, SocketSendError>) -> Void
+    ) -> Void
+
+    var onDisplayedStateChange: ((ToggleTarget, DisplayedMuteState) -> Void)?
+    var onUnconfirmedFeedbackStart: ((ToggleTarget) -> Void)?
+    var onUnconfirmedFeedbackEnd: ((DisplayedMuteState) -> Void)?
+    /// Only accepted helpers count, so a server that rejects every helper still reads as disconnected.
+    var onChromeConnectionChange: ((Bool) -> Void)?
+    private(set) var isConnectedToChrome = false
+
+    private(set) var displayed = DisplayedMuteState()
+    private var router = CallRouter()
+    private let send: Send
+    private let logger = Logger(subsystem: "com.macmute.app", category: "toggle")
+    private var toggleConfirmation: ToggleConfirmation!
+
+    init(
+        confirmationTimeouts: ConfirmationTimeouts,
+        feedbackDuration: TimeInterval,
+        send: @escaping Send,
+        schedule: @escaping ToggleConfirmation.Schedule = ToggleConfirmation.scheduleOnMain,
+        makeRequestId: @escaping () -> String = { UUID().uuidString }
+    ) {
+        self.send = send
+        toggleConfirmation = ToggleConfirmation(
+            confirmationTimeouts: confirmationTimeouts,
+            feedbackDuration: feedbackDuration,
+            confirmedState: { [unowned self] target in self.router.selected.flatMap(self.router.profile)?[target] },
+            chainsPending: { [unowned self] target in self.router.toggleRecipient(for: target) == self.router.selected },
+            send: { [unowned self] target, requestId, completion in
+                self.sendToggle(target, requestId: requestId, completion: completion)
+            },
+            schedule: schedule,
+            makeRequestId: makeRequestId
+        )
+        toggleConfirmation.onUnconfirmedFeedbackStart = { [unowned self] target in
+            self.onUnconfirmedFeedbackStart?(target)
+        }
+        toggleConfirmation.onUnconfirmedFeedbackEnd = { [unowned self] in
+            self.onUnconfirmedFeedbackEnd?(self.displayed)
+        }
+        toggleConfirmation.onConfirmed = { [unowned self] target, newState, recipient in
+            self.router.recordConfirmedToggle(target, newState, from: recipient)
+            // The confirmation counts as activity and can change which helper is selected.
+            self.refreshDisplay()
+        }
+    }
+
+    func toggle(_ target: ToggleTarget) {
+        if toggleConfirmation.pendingToggles.pending[target] != nil,
+           let previous = router.toggleRecipient(for: target), previous != router.selected {
+            // The previous press can still fail and show the warning, but the new press does not
+            // chain on it: it starts from the new recipient's own state.
+            logger.notice("New \(target.rawValue, privacy: .public) press replaces one pending on helper \(previous, privacy: .public), sent to helper \(String(describing: self.router.selected), privacy: .public)")
+        }
+        toggleConfirmation.toggle(target)
+    }
+
+    func helperConnected(_ helper: ClientID) {
+        router.connect(helper)
+        updateChromeConnection()
+        logger.notice("Helper \(helper, privacy: .public) connected, requesting mic and camera state")
+        send(["type": "get_state"], helper) { _ in }
+        send(["type": "get_camera_state"], helper) { _ in }
+    }
+
+    func helperDisconnected(_ helper: ClientID) {
+        router.disconnect(helper)
+        updateChromeConnection()
+        refreshDisplay()
+        toggleConfirmation.failPresses(sentTo: helper, reason: "helper_disconnected")
+    }
+
+    func handle(_ message: [String: Any], from helper: ClientID) {
+        guard let type = message["type"] as? String else {
+            logger.error("Message without type from helper \(helper, privacy: .public)")
+            return
+        }
+
+        switch type {
+        case "state_update":
+            guard let muted = message["muted"] as? Bool else { return logMalformed(message, from: helper) }
+            handleState(.mic, muted, from: helper)
+        case "camera_state_update":
+            guard let active = message["active"] as? Bool else { return logMalformed(message, from: helper) }
+            handleState(.camera, !active, from: helper)
+        case "call_status":
+            guard let inCall = message["inCall"] as? Bool else { return logMalformed(message, from: helper) }
+            router.setInCall(inCall, for: helper)
+            refreshDisplay()
+        case "toggle_result":
+            handleToggleResult(message, from: helper)
+        default:
+            logger.error("Unknown message type from helper \(helper, privacy: .public): \(preview(type), privacy: .public)")
+        }
+    }
+
+    private func handleState(_ target: ToggleTarget, _ state: Bool, from helper: ClientID) {
+        router.recordState(target, state, from: helper)
+        refreshDisplay()
+    }
+
+    private func handleToggleResult(_ message: [String: Any], from helper: ClientID) {
+        guard let result = ToggleResult(message: message) else { return logMalformed(message, from: helper) }
+        // The new state is shown before the confirmation runs: ending the amber warning redraws the
+        // indicator, which must already show the state that ended it.
+        if case let .confirmed(newState) = result.outcome {
+            router.recordState(result.target, newState, from: helper)
+            refreshDisplay()
+        }
+        if result.outcome == .failed(reason: "missing_state") {
+            let level: OSLogType = toggleConfirmation.isOutstandingPress(result, from: helper) ? .error : .default
+            logger.log(level: level, "toggle_result ok without state from helper \(helper, privacy: .public): \(preview(message), privacy: .public)")
+        }
+        toggleConfirmation.handle(result, from: helper)
+    }
+
+    private func sendToggle(
+        _ target: ToggleTarget, requestId: String, completion: @escaping (ToggleSendOutcome) -> Void
+    ) {
+        guard let helper = router.selected else {
+            return completion(.failed(reason: SocketSendError.noSocketClient.rawValue))
+        }
+        router.toggleSent(target, to: helper)
+        toggleConfirmation.setRecipient(helper, for: requestId)
+        send(["type": target.commandType, "requestId": requestId], helper) { result in
+            switch result {
+            case .success: completion(.sent)
+            case let .failure(error): completion(.failed(reason: error.rawValue))
+            }
+        }
+    }
+
+    private func updateChromeConnection() {
+        let connected = router.hasHelpers
+        guard connected != isConnectedToChrome else { return }
+        isConnectedToChrome = connected
+        onChromeConnectionChange?(connected)
+    }
+
+    // An unknown state shows as not active: a false "muted" while the mic is live is the dangerous error.
+    private func refreshDisplay() {
+        let profile = router.selected.flatMap(router.profile) ?? CallRouter.Profile()
+        for target in [ToggleTarget.mic, .camera] {
+            let state = profile[target] ?? false
+            guard state != displayed[target] else { continue }
+            displayed[target] = state
+            onDisplayedStateChange?(target, displayed)
+        }
+    }
+
+    private func logMalformed(_ message: [String: Any], from helper: ClientID) {
+        logger.error("Malformed message from helper \(helper, privacy: .public): \(preview(message), privacy: .public)")
+    }
+}

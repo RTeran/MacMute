@@ -22,6 +22,13 @@ struct ShortcutConfigView: View {
                 label: muteStateManager.isCameraOff ? "Camera Off" : "Camera Active"
             )
 
+            if let message = muteStateManager.chromeConnectionStatus.message {
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Divider()
 
             // Mic shortcut

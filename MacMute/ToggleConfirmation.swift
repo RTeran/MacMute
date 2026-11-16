@@ -18,15 +18,31 @@ enum ToggleTarget: String {
 struct PendingToggleTracker {
     struct Pending: Equatable {
         let requestId: String
-        let expected: Bool
+        /// `nil` when the state before the press is unknown, or the press it chained on failed: then
+        /// its own `toggle_result` confirms it whatever state it carries.
+        let expected: Bool?
+        /// The press whose expected state this one undoes, if it chained on one.
+        let chainedOn: String?
+
+        func acceptsResult(_ newState: Bool) -> Bool {
+            expected.map { $0 == newState } ?? true
+        }
+
+        func withoutBaseline() -> Pending {
+            Pending(requestId: requestId, expected: nil, chainedOn: chainedOn)
+        }
     }
 
     private(set) var pending: [ToggleTarget: Pending] = [:]
 
-    // A press made before the previous one is confirmed expects to undo that previous press.
-    mutating func begin(_ target: ToggleTarget, requestId: String, confirmedState: Bool) -> Pending {
-        let baseline = pending[target]?.expected ?? confirmedState
-        let toggle = Pending(requestId: requestId, expected: !baseline)
+    // A press made before the previous one is confirmed expects to undo that previous press, unless
+    // it goes elsewhere: then only the confirmed state of its own recipient is a valid baseline.
+    mutating func begin(
+        _ target: ToggleTarget, requestId: String, confirmedState: Bool?, chainsPending: Bool = true
+    ) -> Pending {
+        let previous = chainsPending ? pending[target] : nil
+        let baseline = previous.map(\.expected) ?? confirmedState
+        let toggle = Pending(requestId: requestId, expected: baseline.map { !$0 }, chainedOn: previous?.requestId)
         pending[target] = toggle
         return toggle
     }
@@ -37,10 +53,9 @@ struct PendingToggleTracker {
         return toggle
     }
 
-    mutating func resolvePassive(_ target: ToggleTarget, newState: Bool) -> Pending? {
-        guard let toggle = pending[target], toggle.expected == newState else { return nil }
-        pending[target] = nil
-        return toggle
+    mutating func dropBaseline(_ target: ToggleTarget, requestId: String) {
+        guard let toggle = pending[target], toggle.requestId == requestId else { return }
+        pending[target] = toggle.withoutBaseline()
     }
 }
 
@@ -119,6 +134,13 @@ protocol ToggleTimer {
 extension DispatchWorkItem: ToggleTimer {}
 
 /// Decides when a toggle counts as confirmed and when to show the unconfirmed (amber) feedback.
+/// Only a press's own `toggle_result` confirms it; passive state updates never do, because a late
+/// update from an older press is indistinguishable from the reply to a newer one.
+/// Every press stays outstanding until its own result arrives, its timeout expires, its send fails,
+/// its helper disconnects, or it is evicted because too many presses are outstanding. So a press
+/// that a newer one chained over or replaced can still report its failure. A press that ends
+/// without its own success always shows the warning, except on eviction; the warning has a single
+/// slot: a newer failure replaces the older one.
 /// Runs on a single queue (main in the app); timers, sending and request ids are injected for tests.
 final class ToggleConfirmation {
     typealias Send = (
@@ -126,27 +148,50 @@ final class ToggleConfirmation {
     ) -> Void
     typealias Schedule = (_ kind: ToggleTimerKind, _ delay: TimeInterval, _ work: @escaping () -> Void) -> ToggleTimer
 
+    static let maxOutstandingPresses = 32
+
     var onUnconfirmedFeedbackStart: ((ToggleTarget) -> Void)?
     var onUnconfirmedFeedbackEnd: (() -> Void)?
+    var onConfirmed: ((ToggleTarget, _ newState: Bool, _ recipient: ClientID) -> Void)?
 
     private(set) var pendingToggles = PendingToggleTracker()
     var isShowingUnconfirmedFeedback: Bool { unconfirmed != nil }
 
+    private struct Press {
+        let target: ToggleTarget
+        var toggle: PendingToggleTracker.Pending
+        let sequence: Int
+        let timer: ToggleTimer
+        var recipient: ClientID?
+
+        var requestId: String { toggle.requestId }
+    }
+
+    private struct Unconfirmed {
+        let press: Press
+        /// The press sequence when the warning started: only a press made after it can end it.
+        let startedAt: Int
+        let end: ToggleTimer
+    }
+
     private let confirmationTimeouts: ConfirmationTimeouts
     private let feedbackDuration: TimeInterval
-    private let confirmedState: (ToggleTarget) -> Bool
+    private let confirmedState: (ToggleTarget) -> Bool?
+    private let chainsPending: (ToggleTarget) -> Bool
     private let send: Send
     private let schedule: Schedule
     private let makeRequestId: () -> String
     private let logger = Logger(subsystem: "com.macmute.app", category: "toggle")
 
-    private var confirmationTimers: [ToggleTarget: ToggleTimer] = [:]
-    private var unconfirmed: (target: ToggleTarget, toggle: PendingToggleTracker.Pending, end: ToggleTimer)?
+    private var outstanding: [String: Press] = [:]
+    private var lastSequence = 0
+    private var unconfirmed: Unconfirmed?
 
     init(
         confirmationTimeouts: ConfirmationTimeouts,
         feedbackDuration: TimeInterval,
-        confirmedState: @escaping (ToggleTarget) -> Bool,
+        confirmedState: @escaping (ToggleTarget) -> Bool?,
+        chainsPending: @escaping (ToggleTarget) -> Bool = { _ in true },
         send: @escaping Send,
         schedule: @escaping Schedule = ToggleConfirmation.scheduleOnMain,
         makeRequestId: @escaping () -> String = { UUID().uuidString }
@@ -154,6 +199,7 @@ final class ToggleConfirmation {
         self.confirmationTimeouts = confirmationTimeouts
         self.feedbackDuration = feedbackDuration
         self.confirmedState = confirmedState
+        self.chainsPending = chainsPending
         self.send = send
         self.schedule = schedule
         self.makeRequestId = makeRequestId
@@ -169,13 +215,18 @@ final class ToggleConfirmation {
 
     func toggle(_ target: ToggleTarget) {
         let requestId = makeRequestId()
-        let toggle = pendingToggles.begin(target, requestId: requestId, confirmedState: confirmedState(target))
-
-        confirmationTimers[target]?.cancel()
-        confirmationTimers[target] = schedule(.confirmation, confirmationTimeouts.timeout(for: target)) { [weak self] in
-            self?.fail(target, requestId: requestId, reason: "timeout")
+        let toggle = pendingToggles.begin(
+            target, requestId: requestId,
+            confirmedState: confirmedState(target), chainsPending: chainsPending(target)
+        )
+        lastSequence += 1
+        let timer = schedule(.confirmation, confirmationTimeouts.timeout(for: target)) { [weak self] in
+            self?.expire(requestId)
         }
-        logger.debug("Toggle \(target.rawValue, privacy: .public) sent, request \(requestId, privacy: .public), expected \(toggle.expected)")
+        // Registered before sending: the send can set the recipient or fail synchronously.
+        outstanding[requestId] = Press(target: target, toggle: toggle, sequence: lastSequence, timer: timer)
+        dropOldestIfOverLimit()
+        logger.debug("Toggle \(target.rawValue, privacy: .public) sent, request \(preview(requestId), privacy: .public), expected \(String(describing: toggle.expected), privacy: .public)")
 
         send(target, requestId) { [weak self] outcome in
             if case let .failed(reason) = outcome {
@@ -184,81 +235,145 @@ final class ToggleConfirmation {
         }
     }
 
-    func handle(_ result: ToggleResult) {
+    /// Records which helper a press was sent to; only that helper's results count for it.
+    func setRecipient(_ helper: ClientID, for requestId: String) {
+        outstanding[requestId]?.recipient = helper
+    }
+
+    /// Whether `result` answers a press of this helper that is still waiting for its result.
+    func isOutstandingPress(_ result: ToggleResult, from helper: ClientID) -> Bool {
+        guard let requestId = result.requestId, let press = outstanding[requestId] else { return false }
+        return press.target == result.target && press.recipient == helper
+    }
+
+    func handle(_ result: ToggleResult, from helper: ClientID) {
         let target = result.target
-        switch (result.outcome, result.requestId) {
-        case let (.failed(reason), requestId?):
+        guard let requestId = result.requestId else { return handleWithoutRequestId(result, from: helper) }
+        guard let press = outstanding[requestId], press.target == target, press.recipient == helper else {
+            return handleUnmatched(result, requestId: requestId, from: helper)
+        }
+
+        switch result.outcome {
+        case let .failed(reason):
             fail(target, requestId: requestId, reason: reason)
 
-        case let (.failed(reason), nil):
-            logger.warning("toggle_result failure for \(target.rawValue, privacy: .public) without requestId (\(reason, privacy: .public)), not matched to a pending toggle")
-
-        case let (.confirmed(newState), requestId?):
-            if let toggle = pendingToggles.resolve(target, requestId: requestId) {
-                if newState == toggle.expected {
-                    confirmed(target, toggle, source: result.source ?? "unknown")
-                } else {
-                    unconfirm(target, toggle, reason: "unexpected_state", source: result.source)
-                }
+        case let .confirmed(newState):
+            let wasPending = pendingToggles.pending[target]?.requestId == requestId
+            finish(requestId)
+            if !press.toggle.acceptsResult(newState) {
+                unconfirm(press, reason: "unexpected_state", source: result.source)
+            } else if wasPending {
+                confirmed(press, newState: newState, source: result.source ?? "unknown", from: helper)
             } else {
-                logger.notice("toggle_result for already resolved \(target.rawValue, privacy: .public) request \(requestId, privacy: .public), source \(result.source ?? "unknown", privacy: .public)")
+                logger.notice("\(target.rawValue, privacy: .public) request \(preview(requestId), privacy: .public) succeeded after a newer press; it does not confirm that press")
             }
-            // A late success after the timeout still carries the real state.
-            endUnconfirmedFeedback(for: target, reached: newState)
-
-        case let (.confirmed(newState), nil):
-            logger.warning("toggle_result for \(target.rawValue, privacy: .public) without requestId, matching it as a passive update")
-            handlePassiveUpdate(target, newState: newState)
         }
     }
 
-    // A passive update that reaches the state the pending press expects is as good as a toggle_result.
-    func handlePassiveUpdate(_ target: ToggleTarget, newState: Bool) {
-        if let toggle = pendingToggles.resolvePassive(target, newState: newState) {
-            confirmed(target, toggle, source: "passive_update")
+    /// Fails every outstanding press sent to `helper`.
+    func failPresses(sentTo helper: ClientID, reason: String) {
+        let presses = outstanding.values.filter { $0.recipient == helper }.sorted { $0.sequence < $1.sequence }
+        for press in presses {
+            fail(press.target, requestId: press.requestId, reason: reason)
         }
-        endUnconfirmedFeedback(for: target, reached: newState)
     }
 
-    private func confirmed(_ target: ToggleTarget, _ toggle: PendingToggleTracker.Pending, source: String) {
-        confirmationTimers.removeValue(forKey: target)?.cancel()
-        logger.notice("Toggle \(target.rawValue, privacy: .public) confirmed by \(source, privacy: .public), request \(toggle.requestId, privacy: .public)")
+    private func handleWithoutRequestId(_ result: ToggleResult, from helper: ClientID) {
+        let target = result.target
+        switch result.outcome {
+        case let .failed(reason):
+            logger.warning("toggle_result failure for \(target.rawValue, privacy: .public) without requestId (\(preview(reason), privacy: .public)), not matched to a pending toggle")
+        case .confirmed:
+            logger.notice("toggle_result for \(target.rawValue, privacy: .public) from helper \(helper, privacy: .public) without requestId cannot be matched to a press; only its state is used")
+        }
+    }
+
+    private func handleUnmatched(_ result: ToggleResult, requestId: String, from helper: ClientID) {
+        let target = result.target
+        switch result.outcome {
+        case let .failed(reason):
+            if let failed = unconfirmed, failed.press.requestId == requestId, failed.press.recipient == helper {
+                logger.error("Toggle \(target.rawValue, privacy: .public) already unconfirmed; real reason \(preview(reason), privacy: .public), request \(preview(requestId), privacy: .public)")
+            } else {
+                logger.notice("Ignoring \(target.rawValue, privacy: .public) failure (\(preview(reason), privacy: .public)) for request \(preview(requestId), privacy: .public): not an outstanding press of this helper")
+            }
+        case let .confirmed(newState):
+            logger.notice("toggle_result for \(target.rawValue, privacy: .public) request \(preview(requestId), privacy: .public) that is not an outstanding press of this helper, source \(preview(result.source ?? "unknown"), privacy: .public)")
+            endUnconfirmedFeedback(ifLateSuccessOf: requestId, target: target, reached: newState, from: helper)
+        }
+    }
+
+    private func expire(_ requestId: String) {
+        guard let press = outstanding[requestId] else { return }
+        fail(press.target, requestId: requestId, reason: "timeout")
+    }
+
+    private func dropOldestIfOverLimit() {
+        guard outstanding.count > Self.maxOutstandingPresses else { return }
+        let pendingIds = Set(pendingToggles.pending.values.map(\.requestId))
+        guard let oldest = outstanding.values
+            .filter({ !pendingIds.contains($0.requestId) })
+            .min(by: { $0.sequence < $1.sequence }) else { return }
+        finish(oldest.requestId)
+        logger.notice("Dropping \(oldest.target.rawValue, privacy: .public) request \(preview(oldest.requestId), privacy: .public): too many presses outstanding")
+    }
+
+    @discardableResult
+    private func finish(_ requestId: String) -> Press? {
+        guard let press = outstanding.removeValue(forKey: requestId) else { return nil }
+        press.timer.cancel()
+        _ = pendingToggles.resolve(press.target, requestId: requestId)
+        return press
+    }
+
+    private func confirmed(_ press: Press, newState: Bool, source: String, from helper: ClientID) {
+        logger.notice("Toggle \(press.target.rawValue, privacy: .public) confirmed by \(preview(source), privacy: .public), request \(preview(press.requestId), privacy: .public)")
+        onConfirmed?(press.target, newState, helper)
+        if let failed = unconfirmed, failed.press.target == press.target, press.sequence > failed.startedAt {
+            endUnconfirmedFeedback()
+        }
     }
 
     private func fail(_ target: ToggleTarget, requestId: String, reason: String) {
-        guard let toggle = pendingToggles.resolve(target, requestId: requestId) else {
-            if unconfirmed?.toggle.requestId == requestId {
-                logger.error("Toggle \(target.rawValue, privacy: .public) already unconfirmed; real reason \(reason, privacy: .public), request \(requestId, privacy: .public)")
+        guard let press = finish(requestId) else {
+            if unconfirmed?.press.requestId == requestId {
+                logger.error("Toggle \(target.rawValue, privacy: .public) already unconfirmed; real reason \(preview(reason), privacy: .public), request \(preview(requestId), privacy: .public)")
             } else {
-                logger.notice("Ignoring stale \(target.rawValue, privacy: .public) failure (\(reason, privacy: .public)), request \(requestId, privacy: .public)")
+                logger.notice("Ignoring stale \(target.rawValue, privacy: .public) failure (\(preview(reason), privacy: .public)), request \(preview(requestId), privacy: .public)")
             }
             return
         }
-        unconfirm(target, toggle, reason: reason)
+        unconfirm(press, reason: reason)
     }
 
-    private func unconfirm(
-        _ target: ToggleTarget, _ toggle: PendingToggleTracker.Pending, reason: String, source: String? = nil
-    ) {
-        confirmationTimers.removeValue(forKey: target)?.cancel()
-        logger.error("Toggle \(target.rawValue, privacy: .public) unconfirmed (\(reason, privacy: .public)), source \(source ?? "none", privacy: .public), request \(toggle.requestId, privacy: .public)")
-        startUnconfirmedFeedback(for: target, toggle)
-    }
-
-    private func startUnconfirmedFeedback(for target: ToggleTarget, _ toggle: PendingToggleTracker.Pending) {
+    private func unconfirm(_ press: Press, reason: String, source: String? = nil) {
+        logger.error("Toggle \(press.target.rawValue, privacy: .public) unconfirmed (\(preview(reason), privacy: .public)), source \(preview(source ?? "none"), privacy: .public), request \(preview(press.requestId), privacy: .public), helper \(String(describing: press.recipient), privacy: .public)")
+        dropBaselines(chainedOn: press.requestId)
         unconfirmed?.end.cancel()
         let end = schedule(.unconfirmedFeedback, feedbackDuration) { [weak self] in
             self?.endUnconfirmedFeedback()
         }
-        unconfirmed = (target, toggle, end)
-        onUnconfirmedFeedbackStart?(target)
+        unconfirmed = Unconfirmed(press: press, startedAt: lastSequence, end: end)
+        onUnconfirmedFeedbackStart?(press.target)
     }
 
-    // A state that is not the one the failed press wanted (e.g. the first press of a fast double
-    // press confirming late) must not hide the warning.
-    private func endUnconfirmedFeedback(for target: ToggleTarget, reached newState: Bool) {
-        guard let failed = unconfirmed,
-              failed.target == target, failed.toggle.expected == newState else { return }
+    // The press did not reach the state it expected, so a press chained on it cannot know its own.
+    private func dropBaselines(chainedOn requestId: String) {
+        guard let next = outstanding.values.first(where: { $0.toggle.chainedOn == requestId }),
+              next.toggle.expected != nil else { return }
+        outstanding[next.requestId]?.toggle = next.toggle.withoutBaseline()
+        pendingToggles.dropBaseline(next.target, requestId: next.requestId)
+        logger.notice("\(next.target.rawValue, privacy: .public) request \(preview(next.requestId), privacy: .public) lost its baseline: the press it chained on failed")
+        dropBaselines(chainedOn: next.requestId)
+    }
+
+    // A late success after the timeout still carries the real state, but only if it is the one the
+    // failed press wanted.
+    private func endUnconfirmedFeedback(
+        ifLateSuccessOf requestId: String, target: ToggleTarget, reached newState: Bool, from helper: ClientID
+    ) {
+        guard let failed = unconfirmed, failed.press.requestId == requestId, failed.press.target == target,
+              failed.press.recipient == helper, failed.press.toggle.acceptsResult(newState) else { return }
         endUnconfirmedFeedback()
     }
 

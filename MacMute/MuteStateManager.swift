@@ -15,6 +15,22 @@ class MuteStateManager: ObservableObject {
 
     @Published var isMuted: Bool = false
     @Published var isCameraOff: Bool = false
+    @Published private(set) var isConnectedToChrome = false
+    @Published private(set) var socketServerState: SocketServerState?
+    @Published var nativeMessagingHostInstallFailed = false
+
+    var chromeConnectionStatus: ChromeConnectionStatus {
+        ChromeConnectionStatus(
+            serverState: socketServerState,
+            isConnected: isConnectedToChrome,
+            nativeHostInstallFailed: nativeMessagingHostInstallFailed
+        )
+    }
+
+    /// Called on main when another MacMute already owns the socket.
+    var onAnotherInstanceRunning: (() -> Void)?
+    /// Called on main each time the socket server starts listening.
+    var onSocketServerListening: (() -> Void)?
 
     @Published var micMutedColor: Color = .red {
         didSet {
@@ -34,33 +50,30 @@ class MuteStateManager: ObservableObject {
     private let socketServer = SocketServer()
     private let overlayManager = MenuBarOverlayManager()
     private let shortcutManager = GlobalShortcutManager.shared
-    private let logger = Logger(subsystem: "com.macmute.app", category: "toggle")
-    private lazy var toggleConfirmation: ToggleConfirmation = {
-        let confirmation = ToggleConfirmation(
+    private lazy var coordinator: MuteStateCoordinator = {
+        let coordinator = MuteStateCoordinator(
             confirmationTimeouts: .standard,
             feedbackDuration: UnconfirmedFeedback.duration,
-            confirmedState: { [unowned self] target in
-                target == .mic ? self.isMuted : self.isCameraOff
-            },
-            send: { [weak self] target, requestId, completion in
-                guard let self = self else { return completion(.failed(reason: "app_shutting_down")) }
-                self.socketServer.sendMessage(["type": target.commandType, "requestId": requestId]) { result in
-                    switch result {
-                    case .success: completion(.sent)
-                    case let .failure(error): completion(.failed(reason: error.rawValue))
-                    }
-                }
+            send: { [weak self] message, helper, completion in
+                guard let self = self else { return completion(.failure(.appShuttingDown)) }
+                self.socketServer.sendMessage(message, to: helper, completion: completion)
             }
         )
-        confirmation.onUnconfirmedFeedbackStart = { [weak self] _ in
+        coordinator.onDisplayedStateChange = { [weak self] target, state in
+            self?.show(state, changed: target)
+        }
+        coordinator.onUnconfirmedFeedbackStart = { [weak self] _ in
             self?.overlayManager.showUnconfirmed(color: Self.unconfirmedColor)
             NotificationCenter.default.post(name: .unconfirmedToggleFeedbackDidStart, object: nil)
         }
-        confirmation.onUnconfirmedFeedbackEnd = { [weak self] in
+        coordinator.onChromeConnectionChange = { [weak self] connected in
+            self?.isConnectedToChrome = connected
+        }
+        coordinator.onUnconfirmedFeedbackEnd = { [weak self] _ in
             self?.overlayManager.hideUnconfirmed()
             NotificationCenter.default.post(name: .unconfirmedToggleFeedbackDidEnd, object: nil)
         }
-        return confirmation
+        return coordinator
     }()
 
     private init() {
@@ -69,14 +82,22 @@ class MuteStateManager: ObservableObject {
     }
 
     func start() {
-        // Setup socket server
-        socketServer.onMessageReceived = { [weak self] message in
-            self?.handleMessage(message)
+        socketServer.onClientConnected = { [weak self] helper in
+            self?.coordinator.helperConnected(helper)
         }
-        socketServer.onClientConnected = { [weak self] in
-            self?.logger.notice("Helper connected, requesting mic and camera state")
-            self?.requestState()
-            self?.requestCameraState()
+        socketServer.onClientDisconnected = { [weak self] helper in
+            self?.coordinator.helperDisconnected(helper)
+        }
+        socketServer.onMessageReceived = { [weak self] helper, message in
+            self?.coordinator.handle(message, from: helper)
+        }
+        socketServer.onStateChange = { [weak self] state in
+            self?.socketServerState = state
+            switch SocketServerReaction(state) {
+            case .installNativeMessagingHost: self?.onSocketServerListening?()
+            case .quit: self?.onAnotherInstanceRunning?()
+            case .none: break
+            }
         }
         socketServer.start()
 
@@ -97,89 +118,25 @@ class MuteStateManager: ObservableObject {
     }
 
     func toggleMute() {
-        toggleConfirmation.toggle(.mic)
+        coordinator.toggle(.mic)
     }
 
     func toggleCamera() {
-        toggleConfirmation.toggle(.camera)
+        coordinator.toggle(.camera)
     }
 
-    func requestState() {
-        socketServer.sendMessage(["type": "get_state"])
-    }
-
-    func requestCameraState() {
-        socketServer.sendMessage(["type": "get_camera_state"])
-    }
-
-    private func handleMessage(_ message: [String: Any]) {
-        guard let type = message["type"] as? String else {
-            logger.error("Message without type: \(String(describing: message), privacy: .public)")
-            return
-        }
-
-        switch type {
-        case "state_update":
-            if let muted = message["muted"] as? Bool {
-                toggleConfirmation.handlePassiveUpdate(.mic, newState: muted)
-                updateMicState(muted: muted)
-            }
-        case "camera_state_update":
-            if let active = message["active"] as? Bool {
-                toggleConfirmation.handlePassiveUpdate(.camera, newState: !active)
-                updateCameraState(active: active)
-            }
-        case "toggle_result":
-            handleToggleResult(message)
-        default:
-            logger.error("Unknown message type: \(type, privacy: .public)")
-        }
-    }
-
-    private func handleToggleResult(_ message: [String: Any]) {
-        guard let result = ToggleResult(message: message) else {
-            logger.error("Malformed toggle_result: \(String(describing: message), privacy: .public)")
-            return
-        }
-        if result.outcome == .failed(reason: "missing_state") {
-            logger.error("toggle_result ok without state: \(String(describing: message), privacy: .public)")
-        }
-
-        toggleConfirmation.handle(result)
-
-        guard case let .confirmed(newState) = result.outcome else { return }
-        switch result.target {
-        case .mic: updateMicState(muted: newState)
-        case .camera: updateCameraState(active: !newState)
-        }
-    }
-
-    private func updateMicState(muted: Bool) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.isMuted = muted
-            self.overlayManager.updateOverlay(
-                micMuted: self.isMuted,
-                cameraOff: self.isCameraOff,
-                micColor: NSColor(self.micMutedColor).withAlphaComponent(0.7),
-                cameraColor: NSColor(self.cameraOffColor).withAlphaComponent(0.7)
-            )
-            NotificationCenter.default.post(name: .muteStateDidChange, object: nil)
-        }
-    }
-
-    private func updateCameraState(active: Bool) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.isCameraOff = !active
-            self.overlayManager.updateOverlay(
-                micMuted: self.isMuted,
-                cameraOff: self.isCameraOff,
-                micColor: NSColor(self.micMutedColor).withAlphaComponent(0.7),
-                cameraColor: NSColor(self.cameraOffColor).withAlphaComponent(0.7)
-            )
-            NotificationCenter.default.post(name: .cameraStateDidChange, object: nil)
-        }
+    // Runs synchronously on main: the overlay must get the new state before a following
+    // hideUnconfirmed() redraws it (B14).
+    private func show(_ state: DisplayedMuteState, changed target: ToggleTarget) {
+        isMuted = state.isMuted
+        isCameraOff = state.isCameraOff
+        overlayManager.updateOverlay(
+            micMuted: isMuted,
+            cameraOff: isCameraOff,
+            micColor: NSColor(micMutedColor).withAlphaComponent(0.7),
+            cameraColor: NSColor(cameraOffColor).withAlphaComponent(0.7)
+        )
+        NotificationCenter.default.post(name: target == .mic ? .muteStateDidChange : .cameraStateDidChange, object: nil)
     }
 
     private func refreshOverlayIfVisible() {
