@@ -27,13 +27,14 @@ final class NativeMessagingHostTests: XCTestCase {
     func testInstallWritesTheManifestChromeLooksFor() throws {
         let directory = try makeTemporaryDirectory()
 
-        try NativeMessagingHost.install(helperPath: "/tmp/MacMuteHelper", into: directory)
+        _ = try NativeMessagingHost.install(helperPath: "/tmp/MacMuteHelper", into: directory)
 
         let written = try JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL(in: directory))) as? NSDictionary
         XCTAssertEqual(written, NativeMessagingHost.manifest(helperPath: "/tmp/MacMuteHelper") as NSDictionary)
     }
 
     func testInstallFailsWhenTheDirectoryIsNotWritable() throws {
+        try XCTSkipIf(geteuid() == 0, "root ignores directory permissions")
         let directory = try makeTemporaryDirectory()
         try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path)
         addTeardownBlock { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path) }
@@ -54,7 +55,7 @@ final class NativeMessagingHostTests: XCTestCase {
         try Data("untouched".utf8).write(to: elsewhere)
         try FileManager.default.createSymbolicLink(at: manifestURL(in: directory), withDestinationURL: elsewhere)
 
-        try NativeMessagingHost.install(helperPath: "/tmp/MacMuteHelper", into: directory)
+        _ = try NativeMessagingHost.install(helperPath: "/tmp/MacMuteHelper", into: directory)
 
         let type = try FileManager.default.attributesOfItem(atPath: manifestURL(in: directory).path)[.type] as? FileAttributeType
         XCTAssertEqual(type, .typeRegular)
