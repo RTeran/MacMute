@@ -67,7 +67,7 @@ The folder name does not matter. Load only one copy of the extension in each Chr
 3. Replace the contents of your `MacMute-chrome-extension` folder with the new ones and click reload in `chrome://extensions`.
 4. Reload the Meet tab.
 
-One time only: if you loaded the extension before it had a fixed ID, its ID changes with this update and the app accepts only the new one. Remove the extension in `chrome://extensions` and add it again with **Load unpacked**.
+One time only: if you loaded the extension before it had a fixed ID, its ID changes with this update and the app accepts only the new one. Remove the extension in `chrome://extensions` and add it again with **Load unpacked**, then check that `chrome://extensions` shows the ID `ealicgogcpkafcocpppnmhgcaiepdple`.
 
 Since 1.1, every release is signed with the same certificate, so macOS keeps the Accessibility permission after an update. When you update from 1.0, grant it once more: if the shortcuts stop working, remove MacMute from the Accessibility list and add it again.
 
@@ -91,7 +91,7 @@ Each shortcut press logs the request and its result (`toggle_result`), including
 
 ## Known limits
 
-The extension's ID comes from the public `key` in `chrome-extension/manifest.json`. Another unpacked extension that copies this key gets the same ID and can talk to the app. Only an extension that you load by hand in Developer mode can do this.
+The extension's ID comes from the public `key` in `chrome-extension/manifest.json`. Another unpacked extension that copies this key gets the same ID and can talk to the app. Only an extension that you load by hand in Developer mode can do this. The Chrome Web Store assigns its own ID, so a store version would need a new allowed origin.
 
 ## Development
 
