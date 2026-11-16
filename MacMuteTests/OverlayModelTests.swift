@@ -62,6 +62,12 @@ final class OverlayModelTests: XCTestCase {
         XCTAssertEqual(model.showUnconfirmed(color: orange), .show(.unconfirmed(color: orange)))
     }
 
+    func testShowsTheUnconfirmedBorderAgainWhenItRestartsWhileShown() {
+        _ = model.showUnconfirmed(color: orange)
+
+        XCTAssertEqual(model.showUnconfirmed(color: orange), .show(.unconfirmed(color: orange)))
+    }
+
     func testKeepsTheUnconfirmedBorderWhileConfirmedUpdatesArrive() {
         _ = model.showUnconfirmed(color: orange)
 

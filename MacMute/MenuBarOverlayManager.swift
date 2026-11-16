@@ -87,7 +87,7 @@ class MenuBarOverlayManager {
             guard let borderView = window.contentView as? ScreenBorderView else { continue }
             borderView.configure(style: style)
             if case .unconfirmed = style {
-                borderView.startPulsing()
+                borderView.restartPulsing()
             } else {
                 borderView.stopPulsing()
             }
@@ -239,8 +239,8 @@ private class ScreenBorderView: NSView {
         }
     }
 
-    func startPulsing() {
-        guard layer?.animation(forKey: Self.pulseKey) == nil else { return }
+    func restartPulsing() {
+        layer?.removeAnimation(forKey: Self.pulseKey)
         layer?.add(UnconfirmedFeedback.blinkAnimation(), forKey: Self.pulseKey)
     }
 

@@ -27,9 +27,11 @@ struct OverlayModel {
         return apply(desiredRender)
     }
 
-    mutating func showUnconfirmed(color: NSColor) -> Render? {
+    // Always rendered, even when already shown: a restarted feedback must restart the blinking.
+    mutating func showUnconfirmed(color: NSColor) -> Render {
         unconfirmedColor = color
-        return apply(desiredRender)
+        rendered = desiredRender
+        return rendered
     }
 
     mutating func hideUnconfirmed() -> Render? {
