@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqaAX6CFBUDy20CjYMJhZHo5e4VjaG2YZT0LoELiEhirg/EXnDD0nZ0gtOM7XqUQNypn33IyvoQLZRGeV5uRdIfvsyKLt9UEHoveTq1254vGLwww2ov8Uk4xT8XDaByoFWT83C0JagEPn9m0UukFVOZKPuFxAJxiWG6CJZu/17qEYlKH22+UMR4W1tF+j2+98ltGvogPyLK2gcERIm09eEeb2/ZzAf5mCXjnImpLlycWKGz5xQtckhrxu+I1K6quUih9eAJAAEIseUc/5HeXdBs4xO5KYHt6c3zeCA6hhvFIM/q0TgVTX2E4yC0AQBreUpzf5VGe+YVPavv2160X08QIDAQAB",
   "name": "MacMute - Meet Controller",
   "description": "Control Google Meet mute state from MacMute desktop app",
   "version": "1.0",
