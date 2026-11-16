@@ -189,6 +189,33 @@ final class SocketServerTests: XCTestCase {
         }
     }
 
+    func testTheProductionRequirementOfASignedAppNamesTheHelperIdentifier() throws {
+        let app = socketDirectory.appendingPathComponent("Signed.app")
+        let signedApp: () -> Result<SecStaticCode, PeerVerificationError> = {
+            var code: SecStaticCode?
+            let status = SecStaticCodeCreateWithPath(URL(fileURLWithPath: "/bin/ls") as CFURL, [], &code)
+            return code.map { .success($0) } ?? .failure(.ownSignatureUnavailable(status))
+        }
+
+        let requirement = try SocketServer.trustedHelperRequirement(appBundle: app, ownCode: signedApp).get()
+
+        var text: CFString?
+        XCTAssertEqual(SecRequirementCopyString(requirement, [], &text), errSecSuccess)
+        let expectedPrefix = "identifier \"\(PeerCodeVerifier.helperIdentifier)\" and certificate leaf"
+        XCTAssertTrue((text as String?)?.hasPrefix(expectedPrefix) == true, text as String? ?? "nil")
+    }
+
+    func testTheHelperIsSignedWithTheIdentifierTheAppTrusts() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let flag = "--identifier \(PeerCodeVerifier.helperIdentifier)"
+
+        let release = try String(contentsOf: root.appendingPathComponent("scripts/release.sh"), encoding: .utf8)
+        let project = try String(contentsOf: root.appendingPathComponent("MacMute.xcodeproj/project.pbxproj"), encoding: .utf8)
+
+        XCTAssertTrue(release.contains(flag), "scripts/release.sh must sign the helper with \(flag)")
+        XCTAssertEqual(project.components(separatedBy: "OTHER_CODE_SIGN_FLAGS = \"\(flag)\";").count - 1, 2)
+    }
+
     func testTheProductionCheckCannotBeBuiltWithoutTheBundledHelper() throws {
         let app = try appBundle(withHelper: false)
 

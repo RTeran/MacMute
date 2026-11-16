@@ -57,15 +57,22 @@ class SocketServer {
         appBundle: URL,
         ownCode: @escaping () -> Result<SecStaticCode, PeerVerificationError>
     ) -> MakeVerifyPeer {
-        let bundledHelper = appBundle.appendingPathComponent("Contents/Resources/MacMuteHelper")
-        return {
-            ownCode()
-                .flatMap {
-                    PeerCodeVerifier.trustedHelperRequirement(
-                        signedLike: $0, helperIdentifier: "com.macmute.helper", bundledHelper: bundledHelper
-                    )
-                }
+        {
+            trustedHelperRequirement(appBundle: appBundle, ownCode: ownCode)
                 .map { requirement in { socket in PeerCodeVerifier.verify(socket: socket, against: requirement) } }
+        }
+    }
+
+    static func trustedHelperRequirement(
+        appBundle: URL,
+        ownCode: () -> Result<SecStaticCode, PeerVerificationError>
+    ) -> Result<SecRequirement, PeerVerificationError> {
+        ownCode().flatMap {
+            PeerCodeVerifier.trustedHelperRequirement(
+                signedLike: $0,
+                helperIdentifier: PeerCodeVerifier.helperIdentifier,
+                bundledHelper: appBundle.appendingPathComponent("Contents/Resources/MacMuteHelper")
+            )
         }
     }
 

@@ -36,6 +36,9 @@ enum PeerVerificationError: Error, Equatable, CustomStringConvertible {
 /// requirement is derived from signatures instead of hard-coded hashes, so the same check works
 /// for ad-hoc Debug builds and for the signed release.
 enum PeerCodeVerifier {
+    /// Must match the identifier the helper is signed with (OTHER_CODE_SIGN_FLAGS and scripts/release.sh).
+    static let helperIdentifier = "com.macmute.helper"
+
     /// The on-disk copy decides what is trusted, so it is used only after the running code has been
     /// checked against it. The checked SecCode keeps that copy, so replacing the file later changes nothing.
     static func ownStaticCode() -> Result<SecStaticCode, PeerVerificationError> {
