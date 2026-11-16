@@ -1,10 +1,5 @@
 import Cocoa
 
-private enum BorderStyle {
-    case state(micMuted: Bool, cameraOff: Bool, micColor: NSColor, cameraColor: NSColor)
-    case unconfirmed(color: NSColor)
-}
-
 class MenuBarOverlayManager {
     private struct ConfirmedState {
         var micMuted = false
