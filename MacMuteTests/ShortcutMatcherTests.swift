@@ -107,3 +107,21 @@ final class ShortcutStoreTests: XCTestCase {
         XCTAssertNil(read())
     }
 }
+
+final class ShortcutShiftOnlyTests: XCTestCase {
+    func testDetectsShiftAsTheOnlyModifier() {
+        XCTAssertTrue(Shortcut(keyCode: 46, modifiers: [.maskShift]).usesShiftAsOnlyModifier)
+    }
+
+    func testIgnoresFlagsThatAreNotShortcutModifiers() {
+        XCTAssertTrue(Shortcut(keyCode: 46, modifiers: [.maskShift, .maskAlphaShift]).usesShiftAsOnlyModifier)
+    }
+
+    func testDoesNotFlagShiftCombinedWithAnotherModifier() {
+        XCTAssertFalse(Shortcut(keyCode: 46, modifiers: [.maskCommand, .maskShift]).usesShiftAsOnlyModifier)
+    }
+
+    func testDoesNotFlagShortcutsWithoutShift() {
+        XCTAssertFalse(Shortcut(keyCode: 46, modifiers: [.maskCommand]).usesShiftAsOnlyModifier)
+    }
+}

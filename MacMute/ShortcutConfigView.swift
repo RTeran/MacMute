@@ -29,6 +29,8 @@ struct ShortcutConfigView: View {
                 label: "Mic Shortcut",
                 isRecording: $isRecordingMic,
                 defaultsKey: "globalShortcut",
+                keyCodeKey: "shortcutKeyCode",
+                modifiersKey: "shortcutModifiers",
                 onRecord: { startRecordingMic() }
             )
 
@@ -48,6 +50,8 @@ struct ShortcutConfigView: View {
                 label: "Camera Shortcut",
                 isRecording: $isRecordingCamera,
                 defaultsKey: "cameraShortcut",
+                keyCodeKey: "cameraShortcutKeyCode",
+                modifiersKey: "cameraShortcutModifiers",
                 onRecord: { startRecordingCamera() }
             )
 
@@ -199,6 +203,8 @@ private struct ShortcutRow: View {
     let label: String
     @Binding var isRecording: Bool
     let defaultsKey: String
+    let keyCodeKey: String
+    let modifiersKey: String
     let onRecord: () -> Void
 
     var body: some View {
@@ -228,7 +234,23 @@ private struct ShortcutRow: View {
                 }
                 .buttonStyle(.bordered)
             }
+
+            if showsShiftOnlyWarning {
+                Label(
+                    "With Shift as the only modifier, \(currentDisplay) can't be typed in any app while this shortcut is set.",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.caption)
+                .foregroundColor(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+            }
         }
+    }
+
+    private var showsShiftOnlyWarning: Bool {
+        guard !isRecording else { return false }
+        let shortcut = ShortcutStore.read(keyCodeKey: keyCodeKey, modifiersKey: modifiersKey, from: .standard)
+        return shortcut?.usesShiftAsOnlyModifier ?? false
     }
 
     private var currentDisplay: String {

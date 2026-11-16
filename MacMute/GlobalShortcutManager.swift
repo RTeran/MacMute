@@ -4,6 +4,10 @@ import os
 struct Shortcut: Equatable {
     let keyCode: UInt16
     let modifiers: CGEventFlags
+
+    var usesShiftAsOnlyModifier: Bool {
+        modifiers.intersection(ShortcutMatcher.relevantModifiers) == .maskShift
+    }
 }
 
 enum ShortcutMatch: Equatable {
