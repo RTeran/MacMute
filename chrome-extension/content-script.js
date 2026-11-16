@@ -20,6 +20,9 @@
     'button[data-tooltip*="micrófono" i]',
   ];
 
+  const MIC_TURN_OFF_LABELS = ["turn off", "desactivar", "ausschalten", "deaktivieren"];
+  const MIC_TURN_ON_LABELS = ["turn on", "activar", "einschalten", "aktivieren"];
+
   // Selectors for the Meet camera button
   const CAMERA_BUTTON_SELECTORS = [
     'button[aria-label*="camera" i]',
@@ -58,24 +61,14 @@
       return button.getAttribute("data-is-muted") === "true";
     }
 
-    // Check aria-label for muted state
+    // The button names the action it performs, so a "turn on" label means the mic is muted.
+    // Each "turn off" label contains a "turn on" one ("unmute"/"mute", "desactivar"/"activar",
+    // "deaktivieren"/"aktivieren"), so the longer label is always checked first.
     const ariaLabel = (button.getAttribute("aria-label") || "").toLowerCase();
-    // "desactivar" contains "activar" as a substring, so check it first in the
-    // muted (false) block to avoid a false positive on the unmuted (true) block.
-    if (
-      ariaLabel.includes("unmute") ||
-      (ariaLabel.includes("activar") && !ariaLabel.includes("desactivar")) ||
-      ariaLabel.includes("turn on")
-    ) {
-      return true; // Button says "unmute" means mic is currently muted
-    }
-    if (
-      ariaLabel.includes("mute") ||
-      ariaLabel.includes("desactivar") ||
-      ariaLabel.includes("turn off")
-    ) {
-      return false; // Button says "mute" means mic is currently unmuted
-    }
+    if (ariaLabel.includes("unmute")) return true;
+    if (MIC_TURN_OFF_LABELS.some((label) => ariaLabel.includes(label))) return false;
+    if (MIC_TURN_ON_LABELS.some((label) => ariaLabel.includes(label))) return true;
+    if (ariaLabel.includes("mute")) return false;
 
     return null;
   }

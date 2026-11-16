@@ -150,6 +150,30 @@ describe("getMuteState", () => {
     expect(script.getMuteState()).toBe(false);
   });
 
+  test("returns false when aria-label is 'Mikrofon ausschalten' (German, mic is on)", () => {
+    document.body.innerHTML =
+      '<button aria-label="Mikrofon ausschalten"></button>';
+    expect(script.getMuteState()).toBe(false);
+  });
+
+  test("returns true when aria-label is 'Mikrofon einschalten' (German, mic is muted)", () => {
+    document.body.innerHTML =
+      '<button aria-label="Mikrofon einschalten"></button>';
+    expect(script.getMuteState()).toBe(true);
+  });
+
+  test("returns false when aria-label is 'Mikrofon deaktivieren' (German, mic is on)", () => {
+    document.body.innerHTML =
+      '<button aria-label="Mikrofon deaktivieren"></button>';
+    expect(script.getMuteState()).toBe(false);
+  });
+
+  test("returns true when aria-label is 'Mikrofon aktivieren' (German, mic is muted)", () => {
+    document.body.innerHTML =
+      '<button aria-label="Mikrofon aktivieren"></button>';
+    expect(script.getMuteState()).toBe(true);
+  });
+
   test("returns null when button exists but has no recognizable state signal", () => {
     document.body.innerHTML =
       '<button aria-label="microphone settings"></button>';
