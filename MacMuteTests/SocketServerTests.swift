@@ -394,7 +394,6 @@ final class SocketServerTests: XCTestCase {
         let reported = expectation(description: "second server state")
         var secondStates: [SocketServerState] = []
         second.onStateChange = { secondStates.append($0); reported.fulfill() }
-        allowRemovingTheStaleSocket()
         second.start()
         wait(for: [reported], timeout: 2)
         second.stop()
@@ -402,6 +401,7 @@ final class SocketServerTests: XCTestCase {
         XCTAssertEqual(secondStates, [.anotherInstanceRunning])
         XCTAssertEqual(try inode(of: socketPath), staleSocket)
         let listening = expectState(.listening)
+        allowRemovingTheStaleSocket()
         wait(for: [listening], timeout: 2)
         _ = connectHelper()
     }
