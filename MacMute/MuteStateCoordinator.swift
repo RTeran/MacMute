@@ -56,11 +56,6 @@ final class MuteStateCoordinator {
             self.onUnconfirmedFeedbackEnd?(self.displayed)
         }
         toggleConfirmation.onConfirmed = { [unowned self] target, newState, recipient in
-            guard let recipient else {
-                self.logger.fault("Confirmed a \(target.rawValue, privacy: .public) toggle that has no recipient")
-                assertionFailure("Confirmed a toggle that has no recipient")
-                return
-            }
             self.router.recordConfirmedToggle(target, newState, from: recipient)
             // The confirmation counts as activity and can change which helper is selected.
             self.refreshDisplay()
@@ -70,8 +65,8 @@ final class MuteStateCoordinator {
     func toggle(_ target: ToggleTarget) {
         if toggleConfirmation.pendingToggles.pending[target] != nil,
            let previous = router.toggleRecipient(for: target), previous != router.selected {
-            // The previous press can no longer be confirmed: only the new recipient's replies count,
-            // and the new press starts from that recipient's own state.
+            // The previous press can still fail and show the warning, but the new press does not
+            // chain on it: it starts from the new recipient's own state.
             logger.notice("New \(target.rawValue, privacy: .public) press replaces one pending on helper \(previous, privacy: .public), sent to helper \(String(describing: self.router.selected), privacy: .public)")
         }
         toggleConfirmation.toggle(target)

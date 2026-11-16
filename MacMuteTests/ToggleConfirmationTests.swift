@@ -23,6 +23,8 @@ private final class FakeTimer: ToggleTimer {
 }
 
 private final class Harness {
+    static let helper: ClientID = 1
+
     var confirmedMuted: Bool? = false
     var confirmedCameraOff: Bool? = false
     var chainsPending = true
@@ -31,7 +33,7 @@ private final class Harness {
     private(set) var timers: [FakeTimer] = []
     private(set) var feedbackStarts: [ToggleTarget] = []
     private(set) var feedbackEnds = 0
-    private(set) var confirmations: [(target: ToggleTarget, newState: Bool, recipient: ClientID?)] = []
+    private(set) var confirmations: [(target: ToggleTarget, newState: Bool, recipient: ClientID)] = []
     private var nextRequestNumber = 0
 
     lazy var confirmation: ToggleConfirmation = {
@@ -44,6 +46,7 @@ private final class Harness {
             chainsPending: { [unowned self] _ in self.chainsPending },
             send: { [unowned self] target, requestId, completion in
                 self.sentRequests.append((target, requestId))
+                self.confirmation.setRecipient(Harness.helper, for: requestId)
                 completion(self.sendOutcome)
             },
             schedule: { [unowned self] kind, delay, work in
@@ -76,11 +79,11 @@ private final class Harness {
         timers.filter { $0.kind == .unconfirmedFeedback }[index]
     }
 
-    func confirm(_ target: ToggleTarget, _ requestId: String?, newState: Bool, from helper: ClientID? = nil) {
+    func confirm(_ target: ToggleTarget, _ requestId: String?, newState: Bool, from helper: ClientID = Harness.helper) {
         confirmation.handle(ToggleResult(target: target, requestId: requestId, outcome: .confirmed(newState: newState)), from: helper)
     }
 
-    func fail(_ target: ToggleTarget, _ requestId: String?, reason: String, from helper: ClientID? = nil) {
+    func fail(_ target: ToggleTarget, _ requestId: String?, reason: String, from helper: ClientID = Harness.helper) {
         confirmation.handle(ToggleResult(target: target, requestId: requestId, outcome: .failed(reason: reason)), from: helper)
     }
 }
