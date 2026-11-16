@@ -444,6 +444,38 @@ final class SocketClientTests: XCTestCase {
         }
     }
 
+    func testAnAdHocHelperInsideAnAppTrustsThatApp() throws {
+        let app = socketDirectory.appendingPathComponent("Fake.app")
+        let helper = app.appendingPathComponent("Contents/Resources/MacMuteHelper")
+        try FileManager.default.createDirectory(at: helper.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: Bundle(for: Self.self).bundleURL, to: helper)
+        let helperCode = try staticCode(at: helper)
+        try skipUnlessAdHoc(helperCode)
+
+        let result = SocketClient.trustedAppCheck(ownCode: { .success(helperCode) })()
+
+        guard case let .failure(.expectedCodeUnavailable(path, _)) = result else {
+            return XCTFail("Expected the requirement to read the containing app, got \(result)")
+        }
+        XCTAssertEqual(URL(fileURLWithPath: path).resolvingSymlinksInPath().path, app.resolvingSymlinksInPath().path)
+    }
+
+    func testASignedHelperInsideAnAppBuildsARequirementThatOtherCodeFails() throws {
+        let helper = socketDirectory.appendingPathComponent("Fake.app/Contents/Resources/MacMuteHelper")
+        try FileManager.default.createDirectory(at: helper.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: "/bin/ls"), to: helper)
+        let helperCode = try staticCode(at: helper)
+        var sockets: [Int32] = [-1, -1]
+        XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &sockets), 0)
+        defer { sockets.forEach { close($0) } }
+
+        let verify = try SocketClient.trustedAppCheck(ownCode: { .success(helperCode) })().get()
+
+        guard case .failure(.requirementNotSatisfied) = verify(sockets[0]) else {
+            return XCTFail("Expected the test process to fail the app requirement")
+        }
+    }
+
     func testTheHelperGivesUpAfterThreeConnectionsWithoutData() {
         XCTAssertEqual(SocketClient.defaultMaxConnectionsWithoutData, 3)
     }
@@ -503,6 +535,20 @@ final class SocketClientTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(0.2))
         XCTAssertEqual(states.last, .stopped(reason), "states \(states)", file: file, line: line)
         XCTAssertEqual(states.filter { $0 == .stopped(reason) }.count, 1, file: file, line: line)
+    }
+
+    private func staticCode(at url: URL) throws -> SecStaticCode {
+        var code: SecStaticCode?
+        XCTAssertEqual(SecStaticCodeCreateWithPath(url as CFURL, [], &code), errSecSuccess)
+        return try XCTUnwrap(code)
+    }
+
+    private func skipUnlessAdHoc(_ code: SecStaticCode) throws {
+        var info: CFDictionary?
+        XCTAssertEqual(SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info), errSecSuccess)
+        if let certificates = (info as? [String: Any])?[kSecCodeInfoCertificates as String] as? [Any], !certificates.isEmpty {
+            throw XCTSkip("The test bundle is signed with a certificate; this test needs an ad-hoc one")
+        }
     }
 
     private func ownDesignatedRequirement() throws -> SecRequirement {
