@@ -29,6 +29,7 @@ final class MuteStateCoordinator {
     private let send: Send
     private let logger = Logger(subsystem: "com.macmute.app", category: "toggle")
     private var toggleConfirmation: ToggleConfirmation!
+    private var replacedRequestIds: [ToggleTarget: String] = [:]
 
     init(
         confirmationTimeouts: ConfirmationTimeouts,
@@ -68,8 +69,9 @@ final class MuteStateCoordinator {
     }
 
     func toggle(_ target: ToggleTarget) {
-        if toggleConfirmation.pendingToggles.pending[target] != nil,
+        if let pending = toggleConfirmation.pendingToggles.pending[target],
            let previous = router.toggleRecipient(for: target), previous != router.selected {
+            replacedRequestIds[target] = pending.requestId
             // The previous press can no longer be confirmed: only the new recipient's replies count,
             // and the new press starts from that recipient's own state.
             logger.notice("New \(target.rawValue, privacy: .public) press replaces one pending on helper \(previous, privacy: .public), sent to helper \(String(describing: self.router.selected), privacy: .public)")
@@ -132,12 +134,17 @@ final class MuteStateCoordinator {
             router.recordState(result.target, newState, from: helper)
             refreshDisplay()
         }
-        guard router.isToggleRecipient(helper, for: result.target) else {
-            logger.notice("\(result.target.rawValue, privacy: .public) toggle_result from helper \(helper, privacy: .public) does not confirm the toggle, it was not sent to it")
-            return
-        }
         if result.outcome == .failed(reason: "missing_state") {
-            logger.error("toggle_result ok without state: \(preview(message), privacy: .public)")
+            logger.error("toggle_result ok without state from helper \(helper, privacy: .public): \(preview(message), privacy: .public)")
+        }
+        guard router.isToggleRecipient(helper, for: result.target) else {
+            if case let .failed(reason) = result.outcome, let requestId = result.requestId,
+               requestId == replacedRequestIds[result.target] {
+                logger.error("Replaced \(result.target.rawValue, privacy: .public) press failed on helper \(helper, privacy: .public): \(preview(reason), privacy: .public)")
+            } else {
+                logger.notice("\(result.target.rawValue, privacy: .public) toggle_result from helper \(helper, privacy: .public) does not confirm the toggle, it was not sent to it")
+            }
+            return
         }
         toggleConfirmation.handle(result)
     }
