@@ -59,7 +59,6 @@ class MenuBarOverlayManager {
     }
 
     private func screensChanged() {
-        guard currentScreenLayout() != screenLayout else { return }
         let render = model.screensChanged()
         for window in overlayWindows {
             window.orderOut(nil)
