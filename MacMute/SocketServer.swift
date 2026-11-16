@@ -427,12 +427,21 @@ class SocketServer {
         guard let bound = boundFile else { return }
         boundFile = nil
         var info = stat()
-        guard lstat(socketPath, &info) == 0 else { return }
+        guard lstat(socketPath, &info) == 0 else {
+            let code = errno
+            if code != ENOENT {
+                logger.error("Leaving \(self.socketName, privacy: .public) in place: lstat failed: \(String(cString: strerror(code)), privacy: .public)")
+            }
+            return
+        }
         guard info.st_mode & S_IFMT == S_IFSOCK, info.st_dev == bound.device, info.st_ino == bound.inode else {
             logger.error("Leaving \(self.socketName, privacy: .public) in place: it is no longer the socket this server bound")
             return
         }
-        unlink(socketPath)
+        if unlink(socketPath) != 0 {
+            let reason = String(cString: strerror(errno))
+            logger.error("Failed to remove \(self.socketName, privacy: .public): \(reason, privacy: .public)")
+        }
     }
 
     private func acceptConnection() {
