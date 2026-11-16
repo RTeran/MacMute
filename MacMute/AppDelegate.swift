@@ -1,9 +1,11 @@
 import Cocoa
+import os
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusBarController: StatusBarController!
     private var muteStateManager: MuteStateManager!
     private var didInstallNativeMessagingHost = false
+    private let logger = Logger(subsystem: "com.macmute.app", category: "app")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSLog("MacMute: App launched")
@@ -13,8 +15,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // at its own helper before it quits.
         muteStateManager.onSocketServerListening = { [weak self] in
             guard let self, !self.didInstallNativeMessagingHost else { return }
-            self.didInstallNativeMessagingHost = true
-            self.installNativeMessagingHost()
+            // A failed install is tried again on the next listening report.
+            self.didInstallNativeMessagingHost = self.installNativeMessagingHost()
+            self.muteStateManager.nativeMessagingHostInstallFailed = !self.didInstallNativeMessagingHost
         }
         muteStateManager.onAnotherInstanceRunning = { [weak self] in
             self?.quitBecauseAnotherInstanceIsRunning()
@@ -41,7 +44,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         muteStateManager.stop()
     }
 
-    private func installNativeMessagingHost() {
+    private func installNativeMessagingHost() -> Bool {
         let fileManager = FileManager.default
         let home = fileManager.homeDirectoryForCurrentUser
         let chromeNMHDir = home
@@ -50,8 +53,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try fileManager.createDirectory(at: chromeNMHDir, withIntermediateDirectories: true)
         } catch {
-            NSLog("MacMute: Failed to create NativeMessagingHosts directory: \(error)")
-            return
+            logger.error("Failed to create the NativeMessagingHosts directory: \(error.localizedDescription)")
+            return false
         }
 
         let helperURL = Bundle.main.bundleURL
@@ -59,8 +62,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let helperPath = helperURL.path
 
         guard fileManager.fileExists(atPath: helperPath) else {
-            NSLog("MacMute: MacMuteHelper not found at \(helperPath)")
-            return
+            logger.error("MacMuteHelper not found at \(helperPath)")
+            return false
         }
 
         // Ensure the helper is executable
@@ -73,9 +76,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let origins = extensionIds.map { "chrome-extension://\($0)/" }
 
         if origins.isEmpty {
-            NSLog("MacMute: WARNING - No MacMute extension found in Chrome. Install the extension and restart the app.")
+            logger.warning("No MacMute extension found in Chrome. Install the extension and restart the app.")
         } else {
-            NSLog("MacMute: Found extension IDs: \(extensionIds)")
+            logger.notice("Found extension IDs: \(extensionIds, privacy: .public)")
         }
 
         let manifest: [String: Any] = [
@@ -91,10 +94,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let data = try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys])
             try data.write(to: manifestPath)
-            NSLog("MacMute: Installed native messaging manifest at \(manifestPath.path)")
-            NSLog("MacMute: Helper path: \(helperPath)")
+            logger.notice("Installed the native messaging manifest at \(manifestPath.path) for the helper at \(helperPath)")
+            return true
         } catch {
-            NSLog("MacMute: Failed to write manifest: \(error)")
+            logger.error("Failed to write the native messaging manifest: \(error.localizedDescription)")
+            return false
         }
     }
 
