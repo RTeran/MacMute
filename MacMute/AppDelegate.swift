@@ -76,24 +76,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
-        let extensionIds = findMacMuteExtensionIds()
-        let origins = extensionIds.map { "chrome-extension://\($0)/" }
-
-        if origins.isEmpty {
-            logger.warning("No MacMute extension found in Chrome. Install the extension and restart the app.")
-        } else {
-            logger.notice("Found extension IDs: \(extensionIds, privacy: .public)")
-        }
-
-        let manifest: [String: Any] = [
-            "name": "com.macmute.helper",
-            "description": "MacMute Native Messaging Helper",
-            "path": helperPath,
-            "type": "stdio",
-            "allowed_origins": origins
-        ]
-
-        let manifestPath = chromeNMHDir.appendingPathComponent("com.macmute.helper.json")
+        let manifest = NativeMessagingHost.manifest(helperPath: helperPath)
+        let manifestPath = chromeNMHDir.appendingPathComponent("\(NativeMessagingHost.name).json")
 
         do {
             let data = try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys])
@@ -104,67 +88,5 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             logger.error("Failed to write the native messaging manifest: \(errorCode(error), privacy: .public)")
             return false
         }
-    }
-
-    private func findMacMuteExtensionIds() -> [String] {
-        let fileManager = FileManager.default
-        let home = fileManager.homeDirectoryForCurrentUser
-        let chromeDir = home.appendingPathComponent("Library/Application Support/Google/Chrome")
-
-        // Check Default and numbered profiles
-        var profileDirs = [chromeDir.appendingPathComponent("Default")]
-        if let contents = try? fileManager.contentsOfDirectory(atPath: chromeDir.path) {
-            for name in contents where name.hasPrefix("Profile ") {
-                profileDirs.append(chromeDir.appendingPathComponent(name))
-            }
-        }
-
-        var extensionIds: Set<String> = []
-
-        for profileDir in profileDirs {
-            // Read Secure Preferences — contains ALL extensions including unpacked
-            let securePrefsPath = profileDir.appendingPathComponent("Secure Preferences")
-            if let ids = extractExtensionIds(fromPrefsAt: securePrefsPath) {
-                extensionIds.formUnion(ids)
-            }
-
-            // Also check regular Preferences as fallback
-            let prefsPath = profileDir.appendingPathComponent("Preferences")
-            if let ids = extractExtensionIds(fromPrefsAt: prefsPath) {
-                extensionIds.formUnion(ids)
-            }
-        }
-
-        return Array(extensionIds)
-    }
-
-    private func extractExtensionIds(fromPrefsAt url: URL) -> [String]? {
-        guard let data = try? Data(contentsOf: url),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let extensions = json["extensions"] as? [String: Any],
-              let settings = extensions["settings"] as? [String: Any] else {
-            return nil
-        }
-
-        var ids: [String] = []
-        for (extId, value) in settings {
-            guard let extInfo = value as? [String: Any] else { continue }
-
-            // Check manifest.name inside the settings entry
-            if let manifest = extInfo["manifest"] as? [String: Any],
-               let name = manifest["name"] as? String,
-               name.contains("MacMute") {
-                ids.append(extId)
-                continue
-            }
-
-            // Also check the path — unpacked extensions loaded from our project dir
-            if let path = extInfo["path"] as? String,
-               path.contains("MacMute") {
-                ids.append(extId)
-            }
-        }
-
-        return ids.isEmpty ? nil : ids
     }
 }
