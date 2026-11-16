@@ -82,7 +82,20 @@ final class OverlayModelTests: XCTestCase {
         XCTAssertEqual(model.hideUnconfirmed(), .show(borderStyle(cameraOff: true)))
     }
 
-    func testDoesNothingWhenHidingAnUnconfirmedBorderThatIsNotShown() {
+    func testHidesWhenTheUnconfirmedBorderEndsAndNothingIsMuted() {
+        _ = model.showUnconfirmed(color: orange)
+
+        XCTAssertEqual(model.hideUnconfirmed(), .hide)
+    }
+
+    func testRestoresTheUnchangedConfirmedStateWhenTheUnconfirmedBorderEnds() {
+        _ = model.updateConfirmed(state(micMuted: true))
+        _ = model.showUnconfirmed(color: orange)
+
+        XCTAssertEqual(model.hideUnconfirmed(), .show(borderStyle(micMuted: true)))
+    }
+
+    func testHidingTheUnconfirmedBorderWhenItIsNotShownLeavesTheRenderUnchanged() {
         _ = model.updateConfirmed(state(micMuted: true))
 
         XCTAssertNil(model.hideUnconfirmed())

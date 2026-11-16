@@ -35,7 +35,6 @@ struct OverlayModel {
     }
 
     mutating func hideUnconfirmed() -> Render? {
-        guard unconfirmedColor != nil else { return nil }
         unconfirmedColor = nil
         return apply(desiredRender)
     }
