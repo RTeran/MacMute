@@ -25,6 +25,17 @@ final class HelperExecutableTests: XCTestCase {
         XCTAssertNil(result.chmodError)
     }
 
+    func testAcceptsAnExecutableHelperOwnedByAnotherUser() throws {
+        let path = "/bin/ls"
+        let owner = try FileManager.default.attributesOfItem(atPath: path)[.ownerAccountID] as? NSNumber
+        XCTAssertNotEqual(owner?.uint32Value, getuid())
+
+        let result = ensureExecutable(atPath: path)
+
+        XCTAssertTrue(result.isExecutable)
+        XCTAssertNil(result.chmodError)
+    }
+
     func testMakesAHelperThatIsNotExecutableExecutable() throws {
         XCTAssertEqual(chmod(helper.path, 0o644), 0)
 
