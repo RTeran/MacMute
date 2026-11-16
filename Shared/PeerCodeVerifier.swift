@@ -10,6 +10,8 @@ enum PeerVerificationError: Error, Equatable, CustomStringConvertible {
     case peerTokenUnavailable(errno: Int32)
     case peerCodeUnavailable(OSStatus)
     case requirementNotSatisfied(OSStatus)
+    case peerStatusUnavailable(OSStatus)
+    case peerWithoutHardenedRuntime
     case notInsideAnApp
     case ownPathUnavailable(OSStatus)
     case securityCallReturnedNothing(String)
@@ -31,6 +33,10 @@ enum PeerVerificationError: Error, Equatable, CustomStringConvertible {
             return "cannot find the peer's code (OSStatus \(status))"
         case let .requirementNotSatisfied(status):
             return "the peer's code signature does not satisfy the trusted requirement (OSStatus \(status))"
+        case let .peerStatusUnavailable(status):
+            return "cannot read the peer's runtime status (OSStatus \(status))"
+        case .peerWithoutHardenedRuntime:
+            return "the peer runs without the hardened runtime, so other code could be injected into it"
         case .notInsideAnApp:
             return "the helper is not in the Contents/Resources folder of an app"
         case let .ownPathUnavailable(status):
@@ -39,6 +45,13 @@ enum PeerVerificationError: Error, Equatable, CustomStringConvertible {
             return "\(function) reported success but returned nothing usable"
         }
     }
+}
+
+/// An older release signed by the same certificate but without the hardened runtime still matches
+/// the requirement, so a certificate-signed peer must also run with the runtime.
+struct TrustedPeer {
+    let requirement: SecRequirement
+    let requiresHardenedRuntime: Bool
 }
 
 /// Checks that the process at the other end of a Unix socket runs trusted code. The trusted
@@ -72,7 +85,7 @@ enum PeerCodeVerifier {
     /// requirement of the bundled helper as it is on disk now.
     static func trustedHelperRequirement(
         signedLike app: SecStaticCode, helperIdentifier: String, bundledHelper: URL
-    ) -> Result<SecRequirement, PeerVerificationError> {
+    ) -> Result<TrustedPeer, PeerVerificationError> {
         trustedRequirement(signedLike: app, identifier: helperIdentifier, adHocFallback: bundledHelper)
     }
 
@@ -80,7 +93,7 @@ enum PeerCodeVerifier {
     /// signed by the helper's leaf, or, for an ad-hoc helper, match the containing app on disk now.
     static func trustedAppRequirement(
         signedLike helper: SecStaticCode, appIdentifier: String, containingApp: URL
-    ) -> Result<SecRequirement, PeerVerificationError> {
+    ) -> Result<TrustedPeer, PeerVerificationError> {
         trustedRequirement(signedLike: helper, identifier: appIdentifier, adHocFallback: containingApp)
     }
 
@@ -104,7 +117,7 @@ enum PeerCodeVerifier {
 
     private static func trustedRequirement(
         signedLike ownCode: SecStaticCode, identifier: String, adHocFallback: URL
-    ) -> Result<SecRequirement, PeerVerificationError> {
+    ) -> Result<TrustedPeer, PeerVerificationError> {
         var info: CFDictionary?
         let status = SecCodeCopySigningInformation(ownCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info)
         guard status == errSecSuccess else { return .failure(.ownSignatureUnavailable(status)) }
@@ -113,7 +126,7 @@ enum PeerCodeVerifier {
         }
         guard let certificates = info[kSecCodeInfoCertificates as String] as? [SecCertificate],
               let leaf = certificates.first else {
-            return designatedRequirement(ofCodeAt: adHocFallback)
+            return designatedRequirement(ofCodeAt: adHocFallback).map { TrustedPeer(requirement: $0, requiresHardenedRuntime: false) }
         }
         let leafHash = Insecure.SHA1.hash(data: SecCertificateCopyData(leaf) as Data)
             .map { String(format: "%02x", $0) }.joined()
@@ -122,14 +135,35 @@ enum PeerCodeVerifier {
         let created = SecRequirementCreateWithString(text as CFString, [], &requirement)
         guard created == errSecSuccess else { return .failure(.requirementUnbuildable(created)) }
         guard let requirement else { return .failure(.securityCallReturnedNothing("SecRequirementCreateWithString")) }
-        return .success(requirement)
+        return .success(TrustedPeer(requirement: requirement, requiresHardenedRuntime: true))
     }
 
-    static func verify(socket: Int32, against requirement: SecRequirement) -> Result<Void, PeerVerificationError> {
+    static func verify(socket: Int32, against trusted: TrustedPeer) -> Result<Void, PeerVerificationError> {
         peerCode(of: socket).flatMap { code in
-            let status = SecCodeCheckValidity(code, [], requirement)
-            return status == errSecSuccess ? .success(()) : .failure(.requirementNotSatisfied(status))
+            let status = SecCodeCheckValidity(code, [], trusted.requirement)
+            guard status == errSecSuccess else { return .failure(.requirementNotSatisfied(status)) }
+            guard trusted.requiresHardenedRuntime else { return .success(()) }
+            return dynamicStatus(of: code).flatMap { hardenedRuntimeCheck(codeStatus: $0, required: true) }
         }
+    }
+
+    static let hardenedRuntimeFlag: UInt32 = 0x10000
+
+    static func hardenedRuntimeCheck(codeStatus: UInt32?, required: Bool) -> Result<Void, PeerVerificationError> {
+        guard required else { return .success(()) }
+        guard let codeStatus, codeStatus & hardenedRuntimeFlag != 0 else { return .failure(.peerWithoutHardenedRuntime) }
+        return .success(())
+    }
+
+    // The running process's flags, not the file's: SecCode is a SecStaticCode subclass in the
+    // Security framework, and kSecCSDynamicInformation makes the call read the live status.
+    private static func dynamicStatus(of code: SecCode) -> Result<UInt32?, PeerVerificationError> {
+        var info: CFDictionary?
+        let status = SecCodeCopySigningInformation(
+            unsafeBitCast(code, to: SecStaticCode.self), SecCSFlags(rawValue: kSecCSDynamicInformation), &info
+        )
+        guard status == errSecSuccess else { return .failure(.peerStatusUnavailable(status)) }
+        return .success(((info as? [String: Any])?[kSecCodeInfoStatus as String] as? NSNumber)?.uint32Value)
     }
 
     /// Only for logging: the decision uses the audit token, which a reused PID cannot fake.

@@ -222,7 +222,7 @@ final class SocketServerTests: XCTestCase {
         let requirement = try SocketServer.trustedHelperRequirement(appBundle: app, ownCode: signedApp).get()
 
         var text: CFString?
-        XCTAssertEqual(SecRequirementCopyString(requirement, [], &text), errSecSuccess)
+        XCTAssertEqual(SecRequirementCopyString(requirement.requirement, [], &text), errSecSuccess)
         let expectedPrefix = "identifier \"\(PeerCodeVerifier.helperIdentifier)\" and certificate leaf"
         XCTAssertTrue((text as String?)?.hasPrefix(expectedPrefix) == true, text as String? ?? "nil")
     }

@@ -292,7 +292,7 @@ final class SocketClientTests: XCTestCase {
 
     func testConnectsToAnAppThatSatisfiesTheRealRequirement() throws {
         let requirement = try ownDesignatedRequirement()
-        client = makeClient(verifyApp: { .success { PeerCodeVerifier.verify(socket: $0, against: requirement) } })
+        client = makeClient(verifyApp: { .success { PeerCodeVerifier.verify(socket: $0, against: TrustedPeer(requirement: requirement, requiresHardenedRuntime: false)) } })
         startServer()
         let connected = expectState(.connected)
 
@@ -305,7 +305,7 @@ final class SocketClientTests: XCTestCase {
         var requirement: SecRequirement?
         XCTAssertEqual(SecRequirementCreateWithString(#"identifier "com.macmute.app""# as CFString, [], &requirement), errSecSuccess)
         let appRequirement = try XCTUnwrap(requirement)
-        client = makeClient(verifyApp: { .success { PeerCodeVerifier.verify(socket: $0, against: appRequirement) } })
+        client = makeClient(verifyApp: { .success { PeerCodeVerifier.verify(socket: $0, against: TrustedPeer(requirement: appRequirement, requiresHardenedRuntime: false)) } })
         startServer()
         waitUntilListening()
         let thirdRetry = expectState(.waiting(retryIn: 0.05))
@@ -330,7 +330,7 @@ final class SocketClientTests: XCTestCase {
 
     func testStopsWhenTheAppRejectsItWhileTheHelperVerifiesTheApp() throws {
         let requirement = try ownDesignatedRequirement()
-        client = makeClient(verifyApp: { .success { PeerCodeVerifier.verify(socket: $0, against: requirement) } }, maxConnectionsWithoutData: 3)
+        client = makeClient(verifyApp: { .success { PeerCodeVerifier.verify(socket: $0, against: TrustedPeer(requirement: requirement, requiresHardenedRuntime: false)) } }, maxConnectionsWithoutData: 3)
         startServer(rejectingHelpers: true)
         let stopped = expectState(.stopped(.rejectedByApp))
 

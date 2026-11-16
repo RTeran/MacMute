@@ -18,7 +18,7 @@ final class PeerCodeVerifierTests: XCTestCase {
         var requirement: SecRequirement?
         XCTAssertEqual(SecRequirementCreateWithString(#"identifier "com.macmute.helper""# as CFString, [], &requirement), errSecSuccess)
 
-        let result = PeerCodeVerifier.verify(socket: sockets[0], against: try XCTUnwrap(requirement))
+        let result = PeerCodeVerifier.verify(socket: sockets[0], against: TrustedPeer(requirement: try XCTUnwrap(requirement), requiresHardenedRuntime: false))
 
         guard case .failure(.requirementNotSatisfied) = result else {
             return XCTFail("Expected requirementNotSatisfied, got \(result)")
@@ -29,7 +29,7 @@ final class PeerCodeVerifierTests: XCTestCase {
         var requirement: SecRequirement?
         XCTAssertEqual(SecCodeCopyDesignatedRequirement(try staticCode(at: URL(fileURLWithPath: "/bin/ls")), [], &requirement), errSecSuccess)
 
-        let result = PeerCodeVerifier.verify(socket: sockets[0], against: try XCTUnwrap(requirement))
+        let result = PeerCodeVerifier.verify(socket: sockets[0], against: TrustedPeer(requirement: try XCTUnwrap(requirement), requiresHardenedRuntime: false))
 
         guard case .failure(.requirementNotSatisfied) = result else {
             return XCTFail("Expected requirementNotSatisfied, got \(result)")
@@ -40,7 +40,7 @@ final class PeerCodeVerifierTests: XCTestCase {
         var requirement: SecRequirement?
         XCTAssertEqual(SecRequirementCreateWithString("anchor apple" as CFString, [], &requirement), errSecSuccess)
 
-        let result = PeerCodeVerifier.verify(socket: -1, against: try XCTUnwrap(requirement))
+        let result = PeerCodeVerifier.verify(socket: -1, against: TrustedPeer(requirement: try XCTUnwrap(requirement), requiresHardenedRuntime: false))
 
         guard case .failure(.peerTokenUnavailable) = result else {
             return XCTFail("Expected peerTokenUnavailable, got \(result)")
@@ -56,8 +56,8 @@ final class PeerCodeVerifierTests: XCTestCase {
             signedLike: signed, helperIdentifier: "com.apple.ls", bundledHelper: missingHelper
         ).get()
 
-        let text = try requirementText(requirement)
-        XCTAssertEqual(SecStaticCodeCheckValidity(signed, [], requirement), errSecSuccess, text)
+        let text = try requirementText(requirement.requirement)
+        XCTAssertEqual(SecStaticCodeCheckValidity(signed, [], requirement.requirement), errSecSuccess, text)
     }
 
     func testAnAppWithACertificateRejectsCodeWithAnotherIdentifier() throws {
@@ -68,7 +68,7 @@ final class PeerCodeVerifierTests: XCTestCase {
             signedLike: signed, helperIdentifier: "com.macmute.helper", bundledHelper: missingHelper
         ).get()
 
-        XCTAssertEqual(SecStaticCodeCheckValidity(signed, [], requirement), errSecCSReqFailed)
+        XCTAssertEqual(SecStaticCodeCheckValidity(signed, [], requirement.requirement), errSecCSReqFailed)
     }
 
     func testReportsARequirementThatCannotBeBuilt() throws {
@@ -164,8 +164,8 @@ final class PeerCodeVerifierTests: XCTestCase {
             signedLike: signed, appIdentifier: "com.apple.ls", containingApp: missingApp
         ).get()
 
-        let text = try requirementText(requirement)
-        XCTAssertEqual(SecStaticCodeCheckValidity(signed, [], requirement), errSecSuccess, text)
+        let text = try requirementText(requirement.requirement)
+        XCTAssertEqual(SecStaticCodeCheckValidity(signed, [], requirement.requirement), errSecSuccess, text)
     }
 
     func testAHelperWithACertificateRejectsAnAppWithAnotherIdentifier() throws {
@@ -176,7 +176,7 @@ final class PeerCodeVerifierTests: XCTestCase {
             signedLike: signed, appIdentifier: PeerCodeVerifier.appIdentifier, containingApp: missingApp
         ).get()
 
-        XCTAssertEqual(SecStaticCodeCheckValidity(signed, [], requirement), errSecCSReqFailed)
+        XCTAssertEqual(SecStaticCodeCheckValidity(signed, [], requirement.requirement), errSecCSReqFailed)
     }
 
     func testAnAdHocHelperTrustsTheDesignatedRequirementOfTheContainingApp() throws {
@@ -211,8 +211,115 @@ final class PeerCodeVerifierTests: XCTestCase {
         XCTAssertTrue(description.contains("SecCodeCopySelf"), description)
     }
 
+    func testAcceptsAPeerWithTheHardenedRuntimeWhenItIsRequired() {
+        XCTAssertNoThrow(try PeerCodeVerifier.hardenedRuntimeCheck(codeStatus: 0x10000 | 0x2, required: true).get())
+    }
+
+    func testRejectsAPeerWithoutTheHardenedRuntimeWhenItIsRequired() {
+        let result = PeerCodeVerifier.hardenedRuntimeCheck(codeStatus: 0x2, required: true)
+
+        XCTAssertEqual(result.failure, .peerWithoutHardenedRuntime)
+    }
+
+    func testRejectsAPeerWithAnUnknownStatusWhenTheHardenedRuntimeIsRequired() {
+        let result = PeerCodeVerifier.hardenedRuntimeCheck(codeStatus: nil, required: true)
+
+        XCTAssertEqual(result.failure, .peerWithoutHardenedRuntime)
+    }
+
+    func testIgnoresTheHardenedRuntimeWhenItIsNotRequired() {
+        XCTAssertNoThrow(try PeerCodeVerifier.hardenedRuntimeCheck(codeStatus: 0x2, required: false).get())
+        XCTAssertNoThrow(try PeerCodeVerifier.hardenedRuntimeCheck(codeStatus: nil, required: false).get())
+    }
+
+    func testAnAppWithACertificateRequiresTheHardenedRuntimeFromTheHelper() throws {
+        let signed = try staticCode(at: URL(fileURLWithPath: "/bin/ls"))
+        let missingHelper = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("missing-\(UUID().uuidString)")
+
+        let trusted = try PeerCodeVerifier.trustedHelperRequirement(
+            signedLike: signed, helperIdentifier: "com.apple.ls", bundledHelper: missingHelper
+        ).get()
+
+        XCTAssertTrue(trusted.requiresHardenedRuntime)
+    }
+
+    func testAHelperWithACertificateRequiresTheHardenedRuntimeFromTheApp() throws {
+        let signed = try staticCode(at: URL(fileURLWithPath: "/bin/ls"))
+        let missingApp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("missing-\(UUID().uuidString).app")
+
+        let trusted = try PeerCodeVerifier.trustedAppRequirement(
+            signedLike: signed, appIdentifier: "com.apple.ls", containingApp: missingApp
+        ).get()
+
+        XCTAssertTrue(trusted.requiresHardenedRuntime)
+    }
+
+    func testAnAdHocAppDoesNotRequireTheHardenedRuntime() throws {
+        let trusted = try PeerCodeVerifier.trustedHelperRequirement(
+            signedLike: try adHocTestBundle(), helperIdentifier: "com.macmute.helper", bundledHelper: try ownCodeURL()
+        ).get()
+
+        XCTAssertFalse(trusted.requiresHardenedRuntime)
+    }
+
+    func testAnAdHocHelperDoesNotRequireTheHardenedRuntime() throws {
+        let trusted = try PeerCodeVerifier.trustedAppRequirement(
+            signedLike: try adHocTestBundle(), appIdentifier: PeerCodeVerifier.appIdentifier, containingApp: try ownCodeURL()
+        ).get()
+
+        XCTAssertFalse(trusted.requiresHardenedRuntime)
+    }
+
+    func testRejectsATrustedPeerWithoutTheHardenedRuntimeWhenItIsRequired() throws {
+        try XCTSkipIf(ownCodeHasHardenedRuntime(), "this test process runs with the hardened runtime")
+        let requirement = try ownDesignatedRequirement()
+
+        let result = PeerCodeVerifier.verify(socket: sockets[0], against: TrustedPeer(requirement: requirement, requiresHardenedRuntime: true))
+
+        XCTAssertEqual(result.failure, .peerWithoutHardenedRuntime)
+    }
+
+    func testAcceptsATrustedPeerWithoutTheHardenedRuntimeWhenItIsNotRequired() throws {
+        let requirement = try ownDesignatedRequirement()
+
+        let result = PeerCodeVerifier.verify(socket: sockets[0], against: TrustedPeer(requirement: requirement, requiresHardenedRuntime: false))
+
+        XCTAssertNoThrow(try result.get())
+    }
+
+    func testStillReportsAnUntrustedPeerBeforeTheHardenedRuntime() throws {
+        var requirement: SecRequirement?
+        XCTAssertEqual(SecRequirementCreateWithString(#"identifier "com.macmute.helper""# as CFString, [], &requirement), errSecSuccess)
+
+        let result = PeerCodeVerifier.verify(socket: sockets[0], against: TrustedPeer(requirement: try XCTUnwrap(requirement), requiresHardenedRuntime: true))
+
+        guard case .failure(.requirementNotSatisfied) = result else {
+            return XCTFail("Expected requirementNotSatisfied, got \(result)")
+        }
+    }
+
+    func testDescribesAPeerWithoutTheHardenedRuntime() {
+        XCTAssertTrue(PeerVerificationError.peerWithoutHardenedRuntime.description.contains("hardened runtime"))
+    }
+
     func testReportsThePeerProcessId() {
         XCTAssertEqual(PeerCodeVerifier.peerProcessID(of: sockets[0]), getpid())
+    }
+
+    private func ownDesignatedRequirement() throws -> SecRequirement {
+        var requirement: SecRequirement?
+        XCTAssertEqual(SecCodeCopyDesignatedRequirement(try staticCode(at: try ownCodeURL()), [], &requirement), errSecSuccess)
+        return try XCTUnwrap(requirement)
+    }
+
+    private func ownCodeHasHardenedRuntime() throws -> Bool {
+        var code: SecCode?
+        XCTAssertEqual(SecCodeCopySelf([], &code), errSecSuccess)
+        var info: CFDictionary?
+        let staticView = unsafeBitCast(try XCTUnwrap(code), to: SecStaticCode.self)
+        XCTAssertEqual(SecCodeCopySigningInformation(staticView, SecCSFlags(rawValue: kSecCSDynamicInformation), &info), errSecSuccess)
+        let status = ((info as? [String: Any])?[kSecCodeInfoStatus as String] as? NSNumber)?.uint32Value ?? 0
+        return status & 0x10000 != 0
     }
 
     private func staticCode(at url: URL) throws -> SecStaticCode {
@@ -245,5 +352,12 @@ final class PeerCodeVerifierTests: XCTestCase {
         var url: CFURL?
         XCTAssertEqual(SecCodeCopyPath(try XCTUnwrap(staticCode), [], &url), errSecSuccess)
         return try XCTUnwrap(url) as URL
+    }
+}
+
+private extension Result {
+    var failure: Failure? {
+        if case let .failure(error) = self { return error }
+        return nil
     }
 }

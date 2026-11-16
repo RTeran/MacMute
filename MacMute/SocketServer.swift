@@ -78,14 +78,14 @@ class SocketServer {
     ) -> MakeVerifyPeer {
         {
             trustedHelperRequirement(appBundle: appBundle, ownCode: ownCode)
-                .map { requirement in { socket in PeerCodeVerifier.verify(socket: socket, against: requirement) } }
+                .map { trusted in { socket in PeerCodeVerifier.verify(socket: socket, against: trusted) } }
         }
     }
 
     static func trustedHelperRequirement(
         appBundle: URL,
         ownCode: () -> Result<SecStaticCode, PeerVerificationError>
-    ) -> Result<SecRequirement, PeerVerificationError> {
+    ) -> Result<TrustedPeer, PeerVerificationError> {
         ownCode().flatMap {
             PeerCodeVerifier.trustedHelperRequirement(
                 signedLike: $0,

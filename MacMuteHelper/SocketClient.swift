@@ -105,12 +105,12 @@ final class SocketClient {
     static func trustedAppCheck(ownCode: @escaping () -> Result<SecStaticCode, PeerVerificationError>) -> MakeVerifyApp {
         {
             ownCode().flatMap { helper in
-                PeerCodeVerifier.path(of: helper).flatMap { path -> Result<SecRequirement, PeerVerificationError> in
+                PeerCodeVerifier.path(of: helper).flatMap { path -> Result<TrustedPeer, PeerVerificationError> in
                     guard let app = PeerCodeVerifier.containingApp(ofHelperAt: path) else { return .failure(.notInsideAnApp) }
                     return PeerCodeVerifier.trustedAppRequirement(signedLike: helper, appIdentifier: PeerCodeVerifier.appIdentifier, containingApp: app)
                 }
             }
-            .map { requirement in { socket in PeerCodeVerifier.verify(socket: socket, against: requirement) } }
+            .map { trusted in { socket in PeerCodeVerifier.verify(socket: socket, against: trusted) } }
         }
     }
 
