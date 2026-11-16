@@ -10,6 +10,9 @@ enum PeerVerificationError: Error, Equatable, CustomStringConvertible {
     case peerTokenUnavailable(errno: Int32)
     case peerCodeUnavailable(OSStatus)
     case requirementNotSatisfied(OSStatus)
+    case notInsideAnApp
+    case ownPathUnavailable(OSStatus)
+    case securityCallReturnedNothing(String)
 
     var description: String {
         switch self {
@@ -28,6 +31,12 @@ enum PeerVerificationError: Error, Equatable, CustomStringConvertible {
             return "cannot find the peer's code (OSStatus \(status))"
         case let .requirementNotSatisfied(status):
             return "the peer's code signature does not satisfy the trusted requirement (OSStatus \(status))"
+        case .notInsideAnApp:
+            return "the helper is not in the Contents/Resources folder of an app"
+        case let .ownPathUnavailable(status):
+            return "cannot read where this helper's code is (OSStatus \(status))"
+        case let .securityCallReturnedNothing(function):
+            return "\(function) reported success but returned nothing usable"
         }
     }
 }
@@ -38,18 +47,22 @@ enum PeerVerificationError: Error, Equatable, CustomStringConvertible {
 enum PeerCodeVerifier {
     /// Must match the identifier the helper is signed with (OTHER_CODE_SIGN_FLAGS and scripts/release.sh).
     static let helperIdentifier = "com.macmute.helper"
+    /// Must match PRODUCT_BUNDLE_IDENTIFIER of the app target, which codesign uses as its identifier.
+    static let appIdentifier = "com.macmute.app"
 
     /// The on-disk copy decides what is trusted, so it is used only after the running code has been
     /// checked against it.
     static func ownStaticCode() -> Result<SecStaticCode, PeerVerificationError> {
         var code: SecCode?
         var status = SecCodeCopySelf([], &code)
-        guard status == errSecSuccess, let code else { return .failure(.ownSignatureUnavailable(status)) }
+        guard status == errSecSuccess else { return .failure(.ownSignatureUnavailable(status)) }
+        guard let code else { return .failure(.securityCallReturnedNothing("SecCodeCopySelf")) }
         status = SecCodeCheckValidity(code, [], nil)
         guard status == errSecSuccess else { return .failure(.ownSignatureInvalid(status)) }
         var staticCode: SecStaticCode?
         status = SecCodeCopyStaticCode(code, [], &staticCode)
-        guard status == errSecSuccess, let staticCode else { return .failure(.ownSignatureUnavailable(status)) }
+        guard status == errSecSuccess else { return .failure(.ownSignatureUnavailable(status)) }
+        guard let staticCode else { return .failure(.securityCallReturnedNothing("SecCodeCopyStaticCode")) }
         return .success(staticCode)
     }
 
@@ -60,21 +73,55 @@ enum PeerCodeVerifier {
     static func trustedHelperRequirement(
         signedLike app: SecStaticCode, helperIdentifier: String, bundledHelper: URL
     ) -> Result<SecRequirement, PeerVerificationError> {
+        trustedRequirement(signedLike: app, identifier: helperIdentifier, adHocFallback: bundledHelper)
+    }
+
+    /// The helper's side of `trustedHelperRequirement`: the app must carry `appIdentifier` and be
+    /// signed by the helper's leaf, or, for an ad-hoc helper, match the containing app on disk now.
+    static func trustedAppRequirement(
+        signedLike helper: SecStaticCode, appIdentifier: String, containingApp: URL
+    ) -> Result<SecRequirement, PeerVerificationError> {
+        trustedRequirement(signedLike: helper, identifier: appIdentifier, adHocFallback: containingApp)
+    }
+
+    /// The app copies the helper into Contents/Resources; anywhere else there is no app to trust.
+    static func containingApp(ofHelperAt helper: URL) -> URL? {
+        let resources = helper.deletingLastPathComponent()
+        let contents = resources.deletingLastPathComponent()
+        let app = contents.deletingLastPathComponent()
+        guard resources.lastPathComponent == "Resources", contents.lastPathComponent == "Contents",
+              app.pathExtension == "app" else { return nil }
+        return app
+    }
+
+    static func path(of code: SecStaticCode) -> Result<URL, PeerVerificationError> {
+        var url: CFURL?
+        let status = SecCodeCopyPath(code, [], &url)
+        guard status == errSecSuccess else { return .failure(.ownPathUnavailable(status)) }
+        guard let url else { return .failure(.securityCallReturnedNothing("SecCodeCopyPath")) }
+        return .success(url as URL)
+    }
+
+    private static func trustedRequirement(
+        signedLike ownCode: SecStaticCode, identifier: String, adHocFallback: URL
+    ) -> Result<SecRequirement, PeerVerificationError> {
         var info: CFDictionary?
-        let status = SecCodeCopySigningInformation(app, SecCSFlags(rawValue: kSecCSSigningInformation), &info)
-        guard status == errSecSuccess, let info = info as? [String: Any] else {
-            return .failure(.ownSignatureUnavailable(status))
+        let status = SecCodeCopySigningInformation(ownCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info)
+        guard status == errSecSuccess else { return .failure(.ownSignatureUnavailable(status)) }
+        guard let info = info as? [String: Any] else {
+            return .failure(.securityCallReturnedNothing("SecCodeCopySigningInformation"))
         }
         guard let certificates = info[kSecCodeInfoCertificates as String] as? [SecCertificate],
               let leaf = certificates.first else {
-            return designatedRequirement(ofCodeAt: bundledHelper)
+            return designatedRequirement(ofCodeAt: adHocFallback)
         }
         let leafHash = Insecure.SHA1.hash(data: SecCertificateCopyData(leaf) as Data)
             .map { String(format: "%02x", $0) }.joined()
-        let text = "identifier \"\(helperIdentifier)\" and certificate leaf = H\"\(leafHash)\""
+        let text = "identifier \"\(identifier)\" and certificate leaf = H\"\(leafHash)\""
         var requirement: SecRequirement?
         let created = SecRequirementCreateWithString(text as CFString, [], &requirement)
-        guard created == errSecSuccess, let requirement else { return .failure(.requirementUnbuildable(created)) }
+        guard created == errSecSuccess else { return .failure(.requirementUnbuildable(created)) }
+        guard let requirement else { return .failure(.securityCallReturnedNothing("SecRequirementCreateWithString")) }
         return .success(requirement)
     }
 
@@ -96,14 +143,12 @@ enum PeerCodeVerifier {
     private static func designatedRequirement(ofCodeAt url: URL) -> Result<SecRequirement, PeerVerificationError> {
         var staticCode: SecStaticCode?
         var status = SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode)
-        guard status == errSecSuccess, let staticCode else {
-            return .failure(.expectedCodeUnavailable(path: url.path, status: status))
-        }
+        guard status == errSecSuccess else { return .failure(.expectedCodeUnavailable(path: url.path, status: status)) }
+        guard let staticCode else { return .failure(.securityCallReturnedNothing("SecStaticCodeCreateWithPath")) }
         var requirement: SecRequirement?
         status = SecCodeCopyDesignatedRequirement(staticCode, [], &requirement)
-        guard status == errSecSuccess, let requirement else {
-            return .failure(.expectedCodeUnavailable(path: url.path, status: status))
-        }
+        guard status == errSecSuccess else { return .failure(.expectedCodeUnavailable(path: url.path, status: status)) }
+        guard let requirement else { return .failure(.securityCallReturnedNothing("SecCodeCopyDesignatedRequirement")) }
         return .success(requirement)
     }
 
@@ -118,7 +163,8 @@ enum PeerCodeVerifier {
         let attributes = [kSecGuestAttributeAudit: tokenData] as CFDictionary
         var code: SecCode?
         let status = SecCodeCopyGuestWithAttributes(nil, attributes, [], &code)
-        guard status == errSecSuccess, let code else { return .failure(.peerCodeUnavailable(status)) }
+        guard status == errSecSuccess else { return .failure(.peerCodeUnavailable(status)) }
+        guard let code else { return .failure(.securityCallReturnedNothing("SecCodeCopyGuestWithAttributes")) }
         return .success(code)
     }
 }

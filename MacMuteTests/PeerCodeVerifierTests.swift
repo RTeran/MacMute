@@ -142,6 +142,75 @@ final class PeerCodeVerifierTests: XCTestCase {
         XCTAssertFalse(error.description.contains("someone"), error.description)
     }
 
+    func testFindsTheAppThatBundlesTheHelper() {
+        let helper = URL(fileURLWithPath: "/Applications/MacMute.app/Contents/Resources/MacMuteHelper")
+
+        XCTAssertEqual(PeerCodeVerifier.containingApp(ofHelperAt: helper), URL(fileURLWithPath: "/Applications/MacMute.app"))
+    }
+
+    func testAHelperOutsideAnAppHasNoContainingApp() {
+        XCTAssertNil(PeerCodeVerifier.containingApp(ofHelperAt: URL(fileURLWithPath: "/usr/local/bin/MacMuteHelper")))
+    }
+
+    func testAHelperOutsideTheAppResourcesHasNoContainingApp() {
+        XCTAssertNil(PeerCodeVerifier.containingApp(ofHelperAt: URL(fileURLWithPath: "/Applications/MacMute.app/Contents/MacOS/MacMuteHelper")))
+    }
+
+    func testAHelperWithACertificateTrustsAnAppWithTheIdentifierSignedByTheSameLeaf() throws {
+        let signed = try staticCode(at: URL(fileURLWithPath: "/bin/ls"))
+        let missingApp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("missing-\(UUID().uuidString).app")
+
+        let requirement = try PeerCodeVerifier.trustedAppRequirement(
+            signedLike: signed, appIdentifier: "com.apple.ls", containingApp: missingApp
+        ).get()
+
+        let text = try requirementText(requirement)
+        XCTAssertEqual(SecStaticCodeCheckValidity(signed, [], requirement), errSecSuccess, text)
+    }
+
+    func testAHelperWithACertificateRejectsAnAppWithAnotherIdentifier() throws {
+        let signed = try staticCode(at: URL(fileURLWithPath: "/bin/ls"))
+        let missingApp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("missing-\(UUID().uuidString).app")
+
+        let requirement = try PeerCodeVerifier.trustedAppRequirement(
+            signedLike: signed, appIdentifier: PeerCodeVerifier.appIdentifier, containingApp: missingApp
+        ).get()
+
+        XCTAssertEqual(SecStaticCodeCheckValidity(signed, [], requirement), errSecCSReqFailed)
+    }
+
+    func testAnAdHocHelperTrustsTheDesignatedRequirementOfTheContainingApp() throws {
+        let adHocHelper = try adHocTestBundle()
+
+        let requirement = try PeerCodeVerifier.trustedAppRequirement(
+            signedLike: adHocHelper, appIdentifier: PeerCodeVerifier.appIdentifier, containingApp: try ownCodeURL()
+        ).get()
+
+        XCTAssertNoThrow(try PeerCodeVerifier.verify(socket: sockets[0], against: requirement).get())
+    }
+
+    func testAHelperUnderAFolderOtherThanContentsHasNoContainingApp() {
+        XCTAssertNil(PeerCodeVerifier.containingApp(ofHelperAt: URL(fileURLWithPath: "/Applications/MacMute.app/Other/Resources/MacMuteHelper")))
+    }
+
+    func testAHelperInABundleWithoutTheAppExtensionHasNoContainingApp() {
+        XCTAssertNil(PeerCodeVerifier.containingApp(ofHelperAt: URL(fileURLWithPath: "/Applications/MacMute/Contents/Resources/MacMuteHelper")))
+    }
+
+    func testTheHelperTrustsTheIdentifierTheAppIsSignedWith() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let project = try String(contentsOf: root.appendingPathComponent("MacMute.xcodeproj/project.pbxproj"), encoding: .utf8)
+
+        XCTAssertEqual(project.components(separatedBy: "PRODUCT_BUNDLE_IDENTIFIER = \(PeerCodeVerifier.appIdentifier);").count - 1, 2)
+    }
+
+    func testDescribesASecurityCallThatReturnedNothingWithoutAnOSStatus() {
+        let description = PeerVerificationError.securityCallReturnedNothing("SecCodeCopySelf").description
+
+        XCTAssertFalse(description.contains("OSStatus"), description)
+        XCTAssertTrue(description.contains("SecCodeCopySelf"), description)
+    }
+
     func testReportsThePeerProcessId() {
         XCTAssertEqual(PeerCodeVerifier.peerProcessID(of: sockets[0]), getpid())
     }
