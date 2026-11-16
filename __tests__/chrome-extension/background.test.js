@@ -354,3 +354,156 @@ describe("native port", () => {
     expect(port.postMessage).toHaveBeenCalledWith({ type: "state_update", muted: true });
   });
 });
+
+describe("call status", () => {
+  const fromTab = (id) => ({ tab: { id } });
+
+  function contentScriptSends(message, sender) {
+    chrome.runtime.onMessage.addListener.mock.calls[0][0](message, sender, () => {});
+  }
+
+  function posted() {
+    return port.postMessage.mock.calls.map(([message]) => message);
+  }
+
+  function postedCallStatus() {
+    return posted().filter((message) => message.type === "call_status");
+  }
+
+  const CALL_ENDED = [
+    { type: "call_status", inCall: false },
+    { type: "state_update", muted: false },
+    { type: "camera_state_update", active: true },
+  ];
+
+  test("tells the app the call started once, before the first state", () => {
+    contentScriptSends({ type: "state_update", muted: true }, fromTab(1));
+    contentScriptSends({ type: "camera_state_update", active: true }, fromTab(1));
+    contentScriptSends({ type: "state_update", muted: false }, fromTab(1));
+
+    expect(posted()).toEqual([
+      { type: "call_status", inCall: true },
+      { type: "state_update", muted: true },
+      { type: "camera_state_update", active: true },
+      { type: "state_update", muted: false },
+    ]);
+  });
+
+  test("ends the call and resets the mic and camera when the last tab leaves", () => {
+    contentScriptSends({ type: "state_update", muted: true }, fromTab(1));
+    port.postMessage.mockClear();
+
+    contentScriptSends({ type: "call_left" }, fromTab(1));
+
+    expect(posted()).toEqual(CALL_ENDED);
+  });
+
+  test("keeps the call while another tab is still in it", () => {
+    contentScriptSends({ type: "state_update", muted: true }, fromTab(1));
+    contentScriptSends({ type: "camera_state_update", active: false }, fromTab(2));
+    port.postMessage.mockClear();
+
+    contentScriptSends({ type: "call_left" }, fromTab(1));
+
+    expect(posted()).toEqual([]);
+  });
+
+  test("ignores call_left from a tab that was not in the call", () => {
+    contentScriptSends({ type: "call_left" }, fromTab(1));
+
+    expect(posted()).toEqual([]);
+  });
+
+  test("forwards a state update without a sender tab and does not count it as a call", () => {
+    contentScriptSends({ type: "state_update", muted: true }, {});
+    contentScriptSends({ type: "call_left" }, {});
+
+    expect(posted()).toEqual([{ type: "state_update", muted: true }]);
+  });
+
+  test("ends the call when the last tab in it is closed", () => {
+    contentScriptSends({ type: "state_update", muted: true }, fromTab(1));
+    port.postMessage.mockClear();
+
+    chrome.tabs.onRemoved.addListener.mock.calls[0][0](1, {});
+
+    expect(posted()).toEqual(CALL_ENDED);
+  });
+
+  test("ends the call when the last tab in it navigates away from Meet", () => {
+    contentScriptSends({ type: "state_update", muted: true }, fromTab(1));
+    port.postMessage.mockClear();
+
+    chrome.tabs.onUpdated.addListener.mock.calls[0][0](1, { url: "https://example.com/" }, { id: 1 });
+
+    expect(posted()).toEqual(CALL_ENDED);
+  });
+
+  test("rebuilds the call from the tabs' answers to get_state after a restart", async () => {
+    givenMeetTabs([{ id: 1 }, { id: 2 }]);
+    givenTabResponses({ 1: { inCall: true }, 2: { inCall: false } });
+
+    await background.handleNativeMessage({ type: "get_state" });
+    expect(postedCallStatus()).toEqual([{ type: "call_status", inCall: true }]);
+
+    port.postMessage.mockClear();
+    contentScriptSends({ type: "call_left" }, fromTab(1));
+    expect(posted()).toEqual(CALL_ENDED);
+  });
+
+  test("answers get_state with no call when there is no Meet tab", async () => {
+    givenMeetTabs([]);
+
+    await background.handleNativeMessage({ type: "get_state" });
+
+    expect(posted()).toEqual([{ type: "call_status", inCall: false }]);
+  });
+
+  test("ends the call when get_state finds the tab is no longer in it", async () => {
+    contentScriptSends({ type: "state_update", muted: true }, fromTab(1));
+    port.postMessage.mockClear();
+    givenMeetTabs([{ id: 1 }]);
+    givenTabResponses({ 1: { inCall: false } });
+
+    await background.handleNativeMessage({ type: "get_state" });
+
+    expect(posted()).toEqual(CALL_ENDED);
+  });
+
+  test("ends the call when get_state no longer lists the tab as a Meet tab", async () => {
+    contentScriptSends({ type: "state_update", muted: true }, fromTab(1));
+    port.postMessage.mockClear();
+    givenMeetTabs([]);
+
+    await background.handleNativeMessage({ type: "get_state" });
+
+    expect(posted()).toEqual(CALL_ENDED);
+  });
+
+  test.each([
+    ["the tab could not read its state", { 1: { inCall: false, error: true } }],
+    ["the tab could not be reached", { 1: new Error("Could not establish connection") }],
+    ["the tab gave no answer", { 1: undefined }],
+  ])("keeps a tab in the call when %s", async (_case, responses) => {
+    contentScriptSends({ type: "state_update", muted: true }, fromTab(1));
+    port.postMessage.mockClear();
+    givenMeetTabs([{ id: 1 }]);
+    givenTabResponses(responses);
+
+    await background.handleNativeMessage({ type: "get_state" });
+    expect(posted()).toEqual([{ type: "call_status", inCall: true }]);
+
+    port.postMessage.mockClear();
+    contentScriptSends({ type: "call_left" }, fromTab(1));
+    expect(posted()).toEqual(CALL_ENDED);
+  });
+
+  test("sends no call status for get_camera_state", async () => {
+    givenMeetTabs([{ id: 1 }]);
+    givenTabResponses({ 1: { inCall: true } });
+
+    await background.handleNativeMessage({ type: "get_camera_state" });
+
+    expect(postedCallStatus()).toEqual([]);
+  });
+});

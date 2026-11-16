@@ -56,6 +56,8 @@ function handleNativeMessage(message) {
       return toggleInMeetTabs(message.type, message.requestId);
 
     case "get_state":
+      return queryStateAndCall();
+
     case "get_camera_state":
       return broadcastToMeetTabs({ type: message.type });
 
@@ -166,58 +168,80 @@ async function toggleInMeetTabs(type, requestId) {
 
 async function broadcastToMeetTabs(message) {
   const tabs = await chrome.tabs.query({ url: MEET_URL_PATTERN });
-  await Promise.allSettled(
+  return Promise.all(
     tabs.map((tab) =>
-      sendToTab(tab.id, message).catch((err) => {
-        console.log(`MacMute: Could not reach tab ${tab.id}:`, err.message);
-      })
+      sendToTab(tab.id, message).then(
+        (response) => ({ tabId: tab.id, response }),
+        (err) => {
+          console.log(`MacMute: Could not reach tab ${tab.id}:`, err.message);
+          return { tabId: tab.id, response: undefined };
+        }
+      )
     )
   );
 }
 
-// Track mic and camera state reported by content scripts
-let lastKnownMuted = false;
-let lastKnownCameraActive = true; // true = camera on
+// The service worker loses tabsInCall when Chrome stops it, so the app's get_state on a new
+// connection rebuilds it. A tab that could not tell keeps its last known membership.
+async function queryStateAndCall() {
+  const answers = await broadcastToMeetTabs({ type: "get_state" });
+  const wasInCall = tabsInCall.size > 0;
+  const meetTabIds = new Set(answers.map(({ tabId }) => tabId));
+  for (const tabId of [...tabsInCall]) {
+    if (!meetTabIds.has(tabId)) tabsInCall.delete(tabId);
+  }
+  for (const { tabId, response } of answers) {
+    if (typeof response?.inCall !== "boolean" || response.error) continue;
+    if (response.inCall) tabsInCall.add(tabId);
+    else tabsInCall.delete(tabId);
+  }
+  const isInCall = tabsInCall.size > 0;
+  if (wasInCall && !isInCall) endCall();
+  else postToNative({ type: "call_status", inCall: isInCall });
+}
 
-// Listen for messages from content scripts
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+const tabsInCall = new Set();
+
+function setTabInCall(tabId, inCall) {
+  const wasInCall = tabsInCall.size > 0;
+  if (inCall) tabsInCall.add(tabId);
+  else tabsInCall.delete(tabId);
+  const isInCall = tabsInCall.size > 0;
+  if (!wasInCall && isInCall) postToNative({ type: "call_status", inCall: true });
+  if (wasInCall && !isInCall) endCall();
+}
+
+// The app keeps the last mic and camera state after the call ends, so they are reset here.
+function endCall() {
+  console.log("MacMute: No Meet tab is in a call anymore, resetting the mic and camera state");
+  postToNative({ type: "call_status", inCall: false });
+  postToNative({ type: "state_update", muted: false });
+  postToNative({ type: "camera_state_update", active: true });
+}
+
+chrome.runtime.onMessage.addListener((message, sender) => {
+  const tabId = sender.tab?.id;
   if (message.type === "state_update") {
     console.log("MacMute: State update from content script:", message.muted);
-    lastKnownMuted = message.muted;
+    if (tabId !== undefined) setTabInCall(tabId, true);
     postToNative({ type: "state_update", muted: message.muted });
   } else if (message.type === "camera_state_update") {
     console.log("MacMute: Camera state update from content script:", message.active);
-    lastKnownCameraActive = message.active;
+    if (tabId !== undefined) setTabInCall(tabId, true);
     postToNative({ type: "camera_state_update", active: message.active });
+  } else if (message.type === "call_left") {
+    console.log(`MacMute: Tab ${tabId} left the call`);
+    if (tabId !== undefined) setTabInCall(tabId, false);
   }
   return false;
 });
 
-// Unmute mic and re-enable camera when no active Meet tabs remain (closed or suspended)
-function checkNoMeetTabsLeft() {
-  chrome.tabs.query({ url: MEET_URL_PATTERN }, (tabs) => {
-    if (tabs.length === 0) {
-      if (lastKnownMuted) {
-        console.log("MacMute: No active Meet tabs remain, sending unmute");
-        lastKnownMuted = false;
-        postToNative({ type: "state_update", muted: false });
-      }
-      if (!lastKnownCameraActive) {
-        console.log("MacMute: No active Meet tabs remain, restoring camera state");
-        lastKnownCameraActive = true;
-        postToNative({ type: "camera_state_update", active: true });
-      }
-    }
-  });
-}
+chrome.tabs.onRemoved.addListener((tabId) => setTabInCall(tabId, false));
 
-// Tab closed
-chrome.tabs.onRemoved.addListener(() => checkNoMeetTabsLeft());
-
-// Tab URL changed (e.g. hibernated by a tab suspender extension)
+// Also covers a tab hibernated by a tab suspender extension, which changes its URL.
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.url && !changeInfo.url.startsWith("https://meet.google.com/")) {
-    checkNoMeetTabsLeft();
+    setTabInCall(tabId, false);
   }
 });
 
