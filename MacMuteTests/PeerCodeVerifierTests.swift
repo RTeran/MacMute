@@ -325,6 +325,20 @@ final class PeerCodeVerifierTests: XCTestCase {
         XCTAssertEqual(result.failure, .ownLeafNotPinned)
     }
 
+    // The tests run in xctest, not in the app, so this reads the built app and helper from disk.
+    func testABuildWithAPinRejectsItsAdHocSignature() throws {
+        let app = Bundle(for: Self.self).bundleURL.deletingLastPathComponent().appendingPathComponent("MacMute.app")
+        for binary in [app, app.appendingPathComponent("Contents/Resources/MacMuteHelper")] {
+            let identity = try PeerCodeVerifier.signingIdentity(of: try staticCode(at: binary)).get()
+            guard let pin = try PeerCodeVerifier.leafPin(from: identity.infoPlist).get() else {
+                throw XCTSkip("Built without MACMUTE_LEAF_PIN. Run the tests with MACMUTE_LEAF_PIN=<40 hex> to check a pinned build.")
+            }
+
+            XCTAssertNil(identity.leaf, binary.lastPathComponent)
+            XCTAssertEqual(PeerCodeVerifier.leafPinCheck(pin: pin, leafHash: nil).failure, .ownLeafNotPinned, binary.lastPathComponent)
+        }
+    }
+
     // The test process is xctest, whose Info.plist has no pin key, unlike the app and the helper.
     func testRunningCodeWithoutAPinKeyTrustsNothing() {
         XCTAssertEqual(PeerCodeVerifier.ownCode().failure, .securityCallReturnedNothing(PeerCodeVerifier.leafPinKey))
