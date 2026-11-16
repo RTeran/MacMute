@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Chooses which helper (one per Chrome profile) receives toggles and drives the indicator:
 /// the profile that joined a call most recently, otherwise the one with the most recent activity.
@@ -22,6 +23,7 @@ struct CallRouter {
 
     private var entries: [ClientID: Entry] = [:]
     private var toggleRecipients: [ToggleTarget: ClientID] = [:]
+    private let logger = Logger(subsystem: "com.macmute.app", category: "routing")
     private var clock = 0
 
     var selected: ClientID? {
@@ -54,7 +56,7 @@ struct CallRouter {
     }
 
     mutating func recordState(_ target: ToggleTarget, _ state: Bool, from id: ClientID) {
-        guard var entry = entries[id] else { return }
+        guard var entry = knownEntry(id, for: "\(target.rawValue) state") else { return }
         let previous = entry.profile[target]
         entry.profile[target] = state
         if let previous, previous != state {
@@ -64,14 +66,14 @@ struct CallRouter {
     }
 
     mutating func recordConfirmedToggle(_ target: ToggleTarget, _ state: Bool, from id: ClientID) {
-        guard var entry = entries[id] else { return }
+        guard var entry = knownEntry(id, for: "confirmed \(target.rawValue) toggle") else { return }
         entry.profile[target] = state
         entry.lastActivity = tick()
         entries[id] = entry
     }
 
     mutating func setInCall(_ inCall: Bool, for id: ClientID) {
-        guard var entry = entries[id], entry.profile.inCall != inCall else { return }
+        guard var entry = knownEntry(id, for: "call status"), entry.profile.inCall != inCall else { return }
         entry.profile.inCall = inCall
         if inCall { entry.joinedCallAt = tick() }
         entries[id] = entry
@@ -87,6 +89,14 @@ struct CallRouter {
 
     func toggleRecipient(for target: ToggleTarget) -> ClientID? {
         toggleRecipients[target]
+    }
+
+    private func knownEntry(_ id: ClientID, for update: String) -> Entry? {
+        guard let entry = entries[id] else {
+            logger.notice("Ignoring \(update, privacy: .public) from unknown helper \(id, privacy: .public)")
+            return nil
+        }
+        return entry
     }
 
     private mutating func tick() -> Int {

@@ -193,11 +193,14 @@ final class CallRouterTests: XCTestCase {
         router.recordState(.mic, true, from: 1)
         router.disconnect(1)
 
+        router.recordState(.mic, false, from: 1)
+        router.recordState(.camera, true, from: 3)
         router.recordConfirmedToggle(.mic, false, from: 1)
         router.setInCall(true, for: 1)
         router.connect(2)
 
         XCTAssertNil(router.profile(1))
+        XCTAssertNil(router.profile(3))
         XCTAssertEqual(router.profile(2), CallRouter.Profile())
         XCTAssertEqual(router.selected, 2)
     }
