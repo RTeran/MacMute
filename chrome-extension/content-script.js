@@ -410,10 +410,7 @@
     if (document.visibilityState !== "visible") return;
     mediaSessionSinceVisible.mic = undefined;
     mediaSessionSinceVisible.camera = undefined;
-    if (callLeftAwaitingVisible) {
-      callLeftAwaitingVisible = false;
-      if (callLeftTimer === null) startCallLeftWait();
-    }
+    recheckAwaitedCallLeft();
   }
 
   document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -459,9 +456,49 @@
   let callControlsSeen = false;
   let callLeftTimer = null;
   let callLeftToggleWaits = 0;
-  // Meet's picture-in-picture moves the controls out of a hidden tab, so a hidden tab without
-  // them is only judged once it is shown again.
+  // Meet's picture-in-picture moves the controls out of a hidden tab, so while it may be open a
+  // hidden tab without them is only judged once it is shown again or the window closes.
   let callLeftAwaitingVisible = false;
+  let watchedPictureInPictureWindow = null;
+
+  function openPictureInPictureWindow() {
+    try {
+      if (!("documentPictureInPicture" in window)) return undefined;
+      return window.documentPictureInPicture.window;
+    } catch {
+      return undefined;
+    }
+  }
+
+  // Unverified in Meet: that this isolated world sees the page's window. To always wait for the
+  // tab to be shown instead, make this return true.
+  function pictureInPictureMayHoldTheCall() {
+    return openPictureInPictureWindow() !== null;
+  }
+
+  function watchPictureInPictureClose() {
+    const pictureInPictureWindow = openPictureInPictureWindow();
+    if (!pictureInPictureWindow || pictureInPictureWindow === watchedPictureInPictureWindow) return;
+    stopWatchingPictureInPicture();
+    watchedPictureInPictureWindow = pictureInPictureWindow;
+    pictureInPictureWindow.addEventListener("pagehide", handlePictureInPictureClosed);
+  }
+
+  function stopWatchingPictureInPicture() {
+    watchedPictureInPictureWindow?.removeEventListener("pagehide", handlePictureInPictureClosed);
+    watchedPictureInPictureWindow = null;
+  }
+
+  function handlePictureInPictureClosed() {
+    stopWatchingPictureInPicture();
+    recheckAwaitedCallLeft();
+  }
+
+  function recheckAwaitedCallLeft() {
+    if (!callLeftAwaitingVisible) return;
+    callLeftAwaitingVisible = false;
+    if (callLeftTimer === null) startCallLeftWait();
+  }
 
   function hasCallControls() {
     return Boolean(findMuteButton() || findCameraButton());
@@ -499,9 +536,10 @@
       return;
     }
     if (hasCallControls()) return;
-    if (document.visibilityState === "hidden") {
+    if (document.visibilityState === "hidden" && pictureInPictureMayHoldTheCall()) {
       console.debug("MacMute: call controls gone from a hidden tab, waiting for it to be shown");
       callLeftAwaitingVisible = true;
+      watchPictureInPictureClose();
       return;
     }
     if (togglesInProgress.size > 0) {
@@ -579,6 +617,7 @@
     observer.disconnect();
     cancelStateReport();
     cancelCallLeft();
+    stopWatchingPictureInPicture();
     stopLateWait("mic");
     stopLateWait("camera");
     endTogglesInProgress("torn_down");
@@ -623,6 +662,7 @@
           cancelCallLeft();
           callControlsSeen = false;
           callLeftAwaitingVisible = false;
+          stopWatchingPictureInPicture();
           buttonCache.mic = null;
           buttonCache.camera = null;
           return;

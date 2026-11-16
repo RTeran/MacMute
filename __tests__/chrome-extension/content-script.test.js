@@ -1868,7 +1868,7 @@ describe("call presence", () => {
     expect(callLeftMessages()).toEqual([{ type: "call_left" }]);
   });
 
-  test("waits for the tab to be visible before deciding the call was left", async () => {
+  test("waits for a hidden tab to be shown when the browser has no picture-in-picture API", async () => {
     document.body.innerHTML = MIC_ON + CAMERA_ON;
     script.startObserving();
     setVisibility("hidden");
@@ -1882,6 +1882,70 @@ describe("call presence", () => {
     expect(callLeftMessages()).toEqual([]);
     jest.advanceTimersByTime(1);
     expect(callLeftMessages()).toEqual([{ type: "call_left" }]);
+  });
+
+  describe("with the Document Picture-in-Picture API", () => {
+    afterEach(() => {
+      delete window.documentPictureInPicture;
+    });
+
+    function installPictureInPicture(api) {
+      Object.defineProperty(window, "documentPictureInPicture", { configurable: true, value: api });
+    }
+
+    async function leaveFromHiddenTab() {
+      document.body.innerHTML = MIC_ON + CAMERA_ON;
+      script.startObserving();
+      setVisibility("hidden");
+      await leaveCall();
+    }
+
+    test("waits for the tab to be shown while a picture-in-picture window is open", async () => {
+      installPictureInPicture({ window: new EventTarget() });
+
+      await leaveFromHiddenTab();
+      jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS * 10);
+      expect(callLeftMessages()).toEqual([]);
+
+      showPage();
+      jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS);
+      expect(callLeftMessages()).toEqual([{ type: "call_left" }]);
+    });
+
+    test("sends call_left from a hidden tab when no picture-in-picture window is open", async () => {
+      installPictureInPicture({ window: null });
+
+      await leaveFromHiddenTab();
+
+      expect(callLeftMessages()).toEqual([{ type: "call_left" }]);
+    });
+
+    test("checks the call again when the picture-in-picture window closes", async () => {
+      const pictureInPictureWindow = new EventTarget();
+      const api = { window: pictureInPictureWindow };
+      installPictureInPicture(api);
+      await leaveFromHiddenTab();
+
+      api.window = null;
+      pictureInPictureWindow.dispatchEvent(new Event("pagehide"));
+      jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS - 1);
+      expect(callLeftMessages()).toEqual([]);
+      jest.advanceTimersByTime(1);
+      expect(callLeftMessages()).toEqual([{ type: "call_left" }]);
+    });
+
+    test("waits for the tab to be shown when reading the picture-in-picture window fails", async () => {
+      installPictureInPicture({
+        get window() {
+          throw new Error("blocked");
+        },
+      });
+
+      await leaveFromHiddenTab();
+      jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS * 10);
+
+      expect(callLeftMessages()).toEqual([]);
+    });
   });
 
   test("stays in the call when the tab comes back visible with its controls", async () => {
