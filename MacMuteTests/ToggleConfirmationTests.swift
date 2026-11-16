@@ -25,6 +25,7 @@ private final class FakeTimer: ToggleTimer {
 private final class Harness {
     var confirmedMuted: Bool? = false
     var confirmedCameraOff: Bool? = false
+    var chainsPending = true
     var sendOutcome = ToggleSendOutcome.sent
     private(set) var sentRequests: [(target: ToggleTarget, requestId: String)] = []
     private(set) var timers: [FakeTimer] = []
@@ -40,6 +41,7 @@ private final class Harness {
             confirmedState: { [unowned self] target in
                 target == .mic ? self.confirmedMuted : self.confirmedCameraOff
             },
+            chainsPending: { [unowned self] _ in self.chainsPending },
             send: { [unowned self] target, requestId, completion in
                 self.sentRequests.append((target, requestId))
                 completion(self.sendOutcome)
@@ -233,6 +235,51 @@ final class ToggleConfirmationTests: XCTestCase {
 
         XCTAssertEqual(harness.feedbackStarts, [.mic])
         XCTAssertEqual(harness.confirmations.map(\.newState), [true])
+        XCTAssertEqual(harness.feedbackEnds, 0)
+        XCTAssertTrue(harness.confirmation.isShowingUnconfirmedFeedback)
+    }
+
+    func testAPressMadeAfterItsPredecessorLostItsBaselineHasNoBaselineEither() {
+        harness.confirmation.toggle(.mic)
+        harness.confirmation.toggle(.mic)
+        harness.fail(.mic, "r1", reason: "button_not_found")
+
+        harness.confirmation.toggle(.mic)
+        harness.confirm(.mic, "r3", newState: false)
+
+        XCTAssertEqual(harness.feedbackStarts, [.mic])
+    }
+
+    func testAPressChainedOnOneThatReportedTheWrongStateLosesItsBaseline() {
+        harness.confirmation.toggle(.mic)
+        harness.confirmation.toggle(.mic)
+
+        harness.confirm(.mic, "r1", newState: false)
+        harness.confirm(.mic, "r2", newState: true)
+
+        XCTAssertEqual(harness.feedbackStarts, [.mic])
+        XCTAssertEqual(harness.confirmations.map(\.newState), [true])
+    }
+
+    func testAPressThatDoesNotChainKeepsItsBaselineWhenTheOlderPressFails() {
+        harness.chainsPending = false
+        harness.confirmation.toggle(.mic)
+        harness.confirmation.toggle(.mic)
+
+        harness.confirmationTimer(0).fire()
+        harness.confirm(.mic, "r2", newState: false)
+
+        XCTAssertEqual(harness.feedbackStarts, [.mic, .mic])
+    }
+
+    func testALateSuccessReportingTheOldStateKeepsTheWarning() {
+        harness.confirmation.toggle(.mic)
+        harness.confirmationTimer().fire()
+
+        harness.confirm(.mic, "r1", newState: false)
+
+        XCTAssertEqual(harness.feedbackEnds, 0)
+        XCTAssertTrue(harness.confirmation.isShowingUnconfirmedFeedback)
     }
 
     func testAPressChainedOnATimedOutPressLosesItsBaseline() {
