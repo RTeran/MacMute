@@ -518,6 +518,30 @@ final class SocketServerTests: XCTestCase {
         second.stop()
     }
 
+    func testDoesNotListenWhenTheLockFileIsASymbolicLink() throws {
+        let target = socketDirectory.appendingPathComponent("target")
+        try replaceLockFile { try FileManager.default.createSymbolicLink(at: $0, withDestinationURL: target) }
+
+        try expectOnlyFailure()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: target.path))
+    }
+
+    func testDoesNotListenWhenTheLockFileIsAFIFO() throws {
+        try replaceLockFile { XCTAssertEqual(mkfifo($0.path, 0o600), 0) }
+        let before = openServerDescriptors()
+
+        try expectOnlyFailure()
+
+        XCTAssertEqual(openServerDescriptors(), before)
+    }
+
+    func testDoesNotListenWhenTheLockFileIsADirectory() throws {
+        try replaceLockFile { try FileManager.default.createDirectory(at: $0, withIntermediateDirectories: false) }
+
+        try expectOnlyFailure()
+    }
+
     func testStoppingCancelsAPendingRetry() throws {
         server.stop()
         try leaveUnremovableStaleSocket()
@@ -763,6 +787,22 @@ final class SocketServerTests: XCTestCase {
         XCTAssertNoThrow(try process.run())
         process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0, "\(path) \(arguments)")
+    }
+
+    private func replaceLockFile(with make: (URL) throws -> Void) throws {
+        server.stop()
+        let lock = socketDirectory.appendingPathComponent("macmute.lock")
+        try FileManager.default.removeItem(at: lock)
+        try make(lock)
+    }
+
+    private func expectOnlyFailure(file: StaticString = #filePath, line: UInt = #line) throws {
+        let failed = expectState(.failed)
+        startServer()
+        wait(for: [failed], timeout: 2)
+        waitLongerThanARetry()
+        XCTAssertEqual(states, [.failed], file: file, line: line)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: socketPath), file: file, line: line)
     }
 
     private func waitLongerThanARetry() {

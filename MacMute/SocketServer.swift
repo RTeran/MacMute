@@ -379,7 +379,8 @@ class SocketServer {
         guard fd >= 0 else {
             let code = errno
             let message = "Failed to open the lock file: \(String(cString: strerror(code)))"
-            return code == ELOOP ? .unsafe(message) : .failed(message)
+            // A symbolic link or a directory at the path will not go away by retrying.
+            return code == ELOOP || code == EISDIR ? .unsafe(message) : .failed(message)
         }
         var info = stat()
         guard fstat(fd, &info) == 0 else {
