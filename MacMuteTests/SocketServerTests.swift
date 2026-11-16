@@ -216,8 +216,8 @@ final class SocketServerTests: XCTestCase {
         let signedApp: () -> Result<OwnCode, PeerVerificationError> = {
             var code: SecStaticCode?
             let status = SecStaticCodeCreateWithPath(URL(fileURLWithPath: "/bin/ls") as CFURL, [], &code)
-            return code.map { .success(OwnCode(staticCode: $0, liveStatus: SecCodeSignatureFlags.runtime.rawValue)) }
-                ?? .failure(.ownSignatureUnavailable(status))
+            guard let code else { return .failure(.ownSignatureUnavailable(status)) }
+            return PeerCodeVerifier.signingIdentity(of: code).map { OwnCode(staticCode: code, leaf: $0.leaf) }
         }
 
         let requirement = try SocketServer.trustedHelperRequirement(appBundle: app, ownCode: signedApp).get()
@@ -842,8 +842,7 @@ final class SocketServerTests: XCTestCase {
     private func adHocCode() -> Result<OwnCode, PeerVerificationError> {
         var code: SecStaticCode?
         let status = SecStaticCodeCreateWithPath(Bundle(for: Self.self).bundleURL as CFURL, [], &code)
-        return code.map { .success(OwnCode(staticCode: $0, liveStatus: SecCodeSignatureFlags.adhoc.rawValue)) }
-            ?? .failure(.ownSignatureUnavailable(status))
+        return code.map { .success(OwnCode(staticCode: $0, leaf: nil)) } ?? .failure(.ownSignatureUnavailable(status))
     }
 
     // The running process stands in for the helper, so a socketpair peer satisfies its requirement.

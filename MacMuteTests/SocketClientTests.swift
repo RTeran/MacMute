@@ -470,7 +470,7 @@ final class SocketClientTests: XCTestCase {
         XCTAssertEqual(SecStaticCodeCreateWithPath(Bundle(for: Self.self).bundleURL as CFURL, [], &code), errSecSuccess)
         let testBundle = try XCTUnwrap(code)
 
-        let result = SocketClient.trustedAppCheck(ownCode: { .success(OwnCode(staticCode: testBundle, liveStatus: SecCodeSignatureFlags.adhoc.rawValue)) })()
+        let result = SocketClient.trustedAppCheck(ownCode: { .success(OwnCode(staticCode: testBundle, leaf: nil)) })()
 
         guard case .failure(.notInsideAnApp) = result else {
             return XCTFail("Expected notInsideAnApp, got \(result)")
@@ -485,7 +485,7 @@ final class SocketClientTests: XCTestCase {
         let helperCode = try staticCode(at: helper)
         try skipUnlessAdHoc(helperCode)
 
-        let result = SocketClient.trustedAppCheck(ownCode: { .success(OwnCode(staticCode: helperCode, liveStatus: SecCodeSignatureFlags.adhoc.rawValue)) })()
+        let result = SocketClient.trustedAppCheck(ownCode: { .success(OwnCode(staticCode: helperCode, leaf: nil)) })()
 
         guard case let .failure(.expectedCodeUnavailable(path, _)) = result else {
             return XCTFail("Expected the requirement to read the containing app, got \(result)")
@@ -502,7 +502,7 @@ final class SocketClientTests: XCTestCase {
         XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &sockets), 0)
         defer { sockets.forEach { close($0) } }
 
-        let verify = try SocketClient.trustedAppCheck(ownCode: { .success(OwnCode(staticCode: helperCode, liveStatus: SecCodeSignatureFlags.runtime.rawValue)) })().get()
+        let verify = try SocketClient.trustedAppCheck(ownCode: { PeerCodeVerifier.signingIdentity(of: helperCode).map { OwnCode(staticCode: helperCode, leaf: $0.leaf) } })().get()
 
         guard case .failure(.requirementNotSatisfied) = verify(sockets[0]) else {
             return XCTFail("Expected the test process to fail the app requirement")
@@ -515,9 +515,25 @@ final class SocketClientTests: XCTestCase {
         try FileManager.default.copyItem(at: URL(fileURLWithPath: "/bin/ls"), to: helper)
         let helperCode = try staticCode(at: helper)
 
-        let trusted = try SocketClient.trustedApp(ownCode: { .success(OwnCode(staticCode: helperCode, liveStatus: SecCodeSignatureFlags.runtime.rawValue)) }).get()
+        let trusted = try SocketClient.trustedApp(ownCode: { PeerCodeVerifier.signingIdentity(of: helperCode).map { OwnCode(staticCode: helperCode, leaf: $0.leaf) } }).get()
 
         XCTAssertTrue(trusted.requiresHardenedRuntime)
+    }
+
+    func testAHelperWhoseSignatureOnDiskIsNotTheRunningCodeTrustsNoApp() throws {
+        let helper = socketDirectory.appendingPathComponent("Fake.app/Contents/Resources/MacMuteHelper")
+        try FileManager.default.createDirectory(at: helper.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: "/bin/ls"), to: helper)
+        let swappedOnDisk = try staticCode(at: helper)
+        var running: SecCode?
+        XCTAssertEqual(SecCodeCopySelf([], &running), errSecSuccess)
+        let runningCode = try XCTUnwrap(running)
+
+        let result = SocketClient.trustedApp(ownCode: { PeerCodeVerifier.ownCode(running: runningCode, onDisk: swappedOnDisk) })
+
+        guard case .failure(.ownSignatureInvalid) = result else {
+            return XCTFail("Expected ownSignatureInvalid, got \(result)")
+        }
     }
 
     func testTheHelperGivesUpAfterThreeConnectionsWithoutData() {
