@@ -29,16 +29,17 @@ Download both files from the [latest release](https://github.com/RTeran/MacMute/
 
 You need macOS 13 (Ventura) or later and Google Chrome 111 or later.
 
-The order matters: the app looks for the extension in your Chrome profiles when it starts, and only then allows it to connect. Install the extension first.
+You can install the app and the extension in any order.
 
 ### 1. Install the Chrome extension
 
 1. Unzip `MacMute-chrome-extension.zip`. You get a folder named `MacMute-chrome-extension`.
 2. Move that folder to a permanent place, for example `~/Applications/MacMute-chrome-extension`. Chrome loads the extension from this folder every time it starts, so do not delete it or leave it in `Downloads`.
-3. Keep `MacMute` in the folder name. The app uses it to find the extension.
-4. Open `chrome://extensions` in Chrome.
-5. Turn on **Developer mode** (top-right switch).
-6. Click **Load unpacked** and select the `MacMute-chrome-extension` folder.
+3. Open `chrome://extensions` in Chrome.
+4. Turn on **Developer mode** (top-right switch).
+5. Click **Load unpacked** and select the `MacMute-chrome-extension` folder.
+
+The folder name does not matter. Load only one copy of the extension in each Chrome profile: every copy has the same ID, so Chrome cannot load a release copy and the repo's `chrome-extension/` folder at the same time.
 
 ### 2. Install the app
 
@@ -59,14 +60,14 @@ The order matters: the app looks for the extension in your Chrome profiles when 
 2. Reload any open Google Meet tab.
 3. Click the MacMute icon in the menu bar and record a shortcut for the microphone and one for the camera.
 
-If you install the extension after opening the app, quit and reopen MacMute so it picks up the extension.
-
 ### Update
 
 1. Download the new files from the [latest release](https://github.com/RTeran/MacMute/releases/latest).
 2. Quit MacMute, replace `/Applications/MacMute.app` with the new one and allow it again as in step 2.
 3. Replace the contents of your `MacMute-chrome-extension` folder with the new ones and click reload in `chrome://extensions`.
 4. Reload the Meet tab.
+
+One time only: if you loaded the extension before it had a fixed ID, its ID changes with this update and the app accepts only the new one. Remove the extension in `chrome://extensions` and add it again with **Load unpacked**.
 
 Since 1.1, every release is signed with the same certificate, so macOS keeps the Accessibility permission after an update. When you update from 1.0, grant it once more: if the shortcuts stop working, remove MacMute from the Accessibility list and add it again.
 
@@ -87,6 +88,10 @@ Watch the app and helper logs:
 Use `/usr/bin/log`, not `log`: in zsh, `log` is a built-in command.
 
 Each shortcut press logs the request and its result (`toggle_result`), including whether Meet confirmed it. For extension-side details, open the DevTools console of the Meet tab and filter by `MacMute:` with the **Verbose** level enabled.
+
+## Known limits
+
+The extension's ID comes from the public `key` in `chrome-extension/manifest.json`. Another unpacked extension that copies this key gets the same ID and can talk to the app. Only an extension that you load by hand in Developer mode can do this.
 
 ## Development
 
