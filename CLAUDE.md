@@ -1,12 +1,12 @@
-# MacMute - Instrucciones para Claude
+# MacMute - Instructions for Claude
 
-## Compilación
+## Build
 
-**Siempre verificar que la app compila correctamente antes de dar el trabajo por terminado.**
+**Always verify that the app builds successfully before considering the work done.**
 
-El proyecto es una app macOS en Swift/SwiftUI. Para compilar:
+The project is a macOS app in Swift/SwiftUI. To build:
 ```
 xcodebuild -project MacMute.xcodeproj -scheme MacMute build
 ```
 
-No dejes errores de compilación sin resolver. Si introduces un cambio que rompe la compilación, arréglalo en el mismo turno antes de finalizar.
+Do not leave build errors unresolved. If you introduce a change that breaks the build, fix it in the same turn before finishing.
