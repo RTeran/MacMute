@@ -59,6 +59,20 @@ final class PeerCodeVerifierTests: XCTestCase {
         XCTAssertNotNil(text.range(of: #"^identifier "com\.macmute\.helper" and certificate leaf = H"[0-9a-f]{40}"$"#, options: .regularExpression), text)
     }
 
+    func testReportsARequirementThatCannotBeBuilt() throws {
+        let signedApp = try staticCode(at: URL(fileURLWithPath: "/bin/ls"))
+        let missingHelper = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("missing-\(UUID().uuidString)")
+
+        let result = PeerCodeVerifier.trustedHelperRequirement(
+            signedLike: signedApp, helperIdentifier: #"broken" and"#, bundledHelper: missingHelper
+        )
+
+        guard case let .failure(error) = result, case .requirementUnbuildable = error else {
+            return XCTFail("Expected requirementUnbuildable, got \(result)")
+        }
+        XCTAssertTrue(error.description.contains("cannot build the trusted helper requirement"), error.description)
+    }
+
     func testAnAdHocAppTrustsTheDesignatedRequirementOfTheBundledHelper() throws {
         let adHocApp = try staticCode(at: Bundle(for: Self.self).bundleURL)
 

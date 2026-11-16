@@ -5,6 +5,7 @@ import Security
 enum PeerVerificationError: Error, Equatable, CustomStringConvertible {
     case ownSignatureUnavailable(OSStatus)
     case expectedCodeUnavailable(path: String, status: OSStatus)
+    case requirementUnbuildable(OSStatus)
     case peerTokenUnavailable(errno: Int32)
     case peerCodeUnavailable(OSStatus)
     case requirementNotSatisfied(OSStatus)
@@ -15,6 +16,8 @@ enum PeerVerificationError: Error, Equatable, CustomStringConvertible {
             return "cannot read this app's own signature (OSStatus \(status))"
         case let .expectedCodeUnavailable(path, status):
             return "cannot read the signature of \(path) (OSStatus \(status))"
+        case let .requirementUnbuildable(status):
+            return "cannot build the trusted helper requirement (OSStatus \(status))"
         case let .peerTokenUnavailable(errno):
             return "cannot read the peer's audit token (\(String(cString: strerror(errno))))"
         case let .peerCodeUnavailable(status):
@@ -60,7 +63,7 @@ enum PeerCodeVerifier {
         let text = "identifier \"\(helperIdentifier)\" and certificate leaf = H\"\(leafHash)\""
         var requirement: SecRequirement?
         let created = SecRequirementCreateWithString(text as CFString, [], &requirement)
-        guard created == errSecSuccess, let requirement else { return .failure(.ownSignatureUnavailable(created)) }
+        guard created == errSecSuccess, let requirement else { return .failure(.requirementUnbuildable(created)) }
         return .success(requirement)
     }
 
