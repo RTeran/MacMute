@@ -2,14 +2,46 @@ import Foundation
 
 private let previewLimit = 128
 
-/// Bounds a peer-supplied string before it reaches the log, so a helper cannot flood it.
+/// Bounds a peer-supplied string before it reaches the log, so a helper can neither flood it nor
+/// forge lines in it.
 func preview(_ text: String) -> String {
-    let bytes = text.utf8
-    guard bytes.count > previewLimit else { return text }
+    let escaped = escapingControlCharacters(text)
+    let bytes = escaped.utf8
+    guard bytes.count > previewLimit else { return escaped }
     return String(decoding: bytes.prefix(previewLimit), as: UTF8.self) + "… (\(bytes.count) bytes)"
 }
 
-/// Describes a peer message by its keys, never its values.
+/// Describes a peer message by its keys and value types. Only `type` and `target` show their value.
 func preview(_ message: [String: Any]) -> String {
-    preview("keys=[\(message.keys.sorted().joined(separator: ", "))]")
+    let fields = message.keys.sorted().map { key -> String in
+        let value = message[key]!
+        let described = "\(key):\(jsonTypeName(value))"
+        guard ["type", "target"].contains(key), let text = value as? String else { return described }
+        return "\(described)=\"\(preview(text))\""
+    }
+    return preview(fields.joined(separator: ", "))
+}
+
+private func escapingControlCharacters(_ text: String) -> String {
+    var escaped = String.UnicodeScalarView()
+    for scalar in text.unicodeScalars {
+        if scalar.properties.generalCategory == .control {
+            escaped.append(contentsOf: "\\u{\(String(scalar.value, radix: 16, uppercase: true))}".unicodeScalars)
+        } else {
+            escaped.append(scalar)
+        }
+    }
+    return String(escaped)
+}
+
+private func jsonTypeName(_ value: Any) -> String {
+    switch value {
+    case is String: return "String"
+    case let number as NSNumber:
+        return CFGetTypeID(number) == CFBooleanGetTypeID() ? "Bool" : "Number"
+    case is [Any]: return "Array"
+    case is [String: Any]: return "Object"
+    case is NSNull: return "Null"
+    default: return String(describing: type(of: value))
+    }
 }
