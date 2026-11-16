@@ -162,3 +162,5 @@ gh release create vX.Y dist/MacMute-app.zip dist/MacMute-chrome-extension.zip di
 ```
 
 To sign with another identity, set `MACMUTE_SIGNING_IDENTITY`.
+
+Releases pin the SHA-1 hash of the signing certificate: the app and the helper refuse to connect unless they are signed with that exact certificate. A new certificate means updating `LEAF_PIN` in `scripts/release.sh`. The script stops before building if `LEAF_PIN` does not match the certificate of the signing identity.
