@@ -11,6 +11,14 @@ func preview(_ text: String) -> String {
     return String(decoding: bytes.prefix(previewLimit), as: UTF8.self) + "… (\(bytes.count) bytes)"
 }
 
+/// Names an error by domain and code only: NSError descriptions carry the full path, which
+/// contains the user name.
+func errorCode(_ error: Error) -> String {
+    let nsError = error as NSError
+    let underlying = (nsError.userInfo[NSUnderlyingErrorKey] as? NSError).map { ", \($0.domain) \($0.code)" } ?? ""
+    return "\(nsError.domain) \(nsError.code)\(underlying)"
+}
+
 /// Describes a peer message by its keys and value types. Only `type` and `target` show their value.
 func preview(_ message: [String: Any]) -> String {
     let fields = message.keys.sorted().map { key -> String in

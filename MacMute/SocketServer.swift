@@ -116,14 +116,14 @@ class SocketServer {
             // Something already at the path is refused for what it is, not retried as an I/O error.
             var existing = stat()
             if lstat(url.path, &existing) == 0 { try checkOwnDirectory(url) }
-            throw SocketDirectoryError.operationFailed("createDirectory", Self.errorCode(error))
+            throw SocketDirectoryError.operationFailed("createDirectory", errorCode(error))
         }
         // Checked before setAttributes, which follows symbolic links.
         try checkOwnDirectory(url)
         do {
             try FileManager.default.setAttributes(ownerOnly, ofItemAtPath: url.path)
         } catch {
-            throw SocketDirectoryError.operationFailed("setAttributes", Self.errorCode(error))
+            throw SocketDirectoryError.operationFailed("setAttributes", errorCode(error))
         }
         let info = try checkOwnDirectory(url)
         guard info.st_mode & 0o077 == 0 else { throw SocketDirectoryError.accessibleByOthers(info.st_mode & 0o777) }
@@ -140,13 +140,6 @@ class SocketServer {
         guard type == S_IFDIR else { throw SocketDirectoryError.notADirectory }
         guard info.st_uid == getuid() else { throw SocketDirectoryError.ownedByAnotherUser(info.st_uid) }
         return info
-    }
-
-    // NSError descriptions carry the full path, which contains the user name.
-    static func errorCode(_ error: Error) -> String {
-        let nsError = error as NSError
-        let underlying = (nsError.userInfo[NSUnderlyingErrorKey] as? NSError).map { ", \($0.domain) \($0.code)" } ?? ""
-        return "\(nsError.domain) \(nsError.code)\(underlying)"
     }
 
     /// Fails instead of truncating: a truncated path would bind or connect somewhere else.
