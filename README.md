@@ -68,7 +68,7 @@ If you install the extension after opening the app, quit and reopen MacMute so i
 3. Replace the contents of your `MacMute-chrome-extension` folder with the new ones and click reload in `chrome://extensions`.
 4. Reload the Meet tab.
 
-The app is signed ad hoc, so macOS may forget the Accessibility permission after an update. If the shortcuts stop working, remove MacMute from the Accessibility list and add it again.
+Since 1.1, every release is signed with the same certificate, so macOS keeps the Accessibility permission after an update. When you update from 1.0, grant it once more: if the shortcuts stop working, remove MacMute from the Accessibility list and add it again.
 
 ### Uninstall
 
@@ -119,14 +119,19 @@ xcodebuild -project MacMute.xcodeproj -scheme MacMute build
 
 ### Publish a release
 
-Build a universal app and package both downloads:
+Releases are signed with a self-signed certificate named `MacMute Code Signing`. It is not trusted by Apple, so Gatekeeper still asks users to allow the app once, but its identity stays the same between releases and macOS keeps the Accessibility permission. Releases signed with a different certificate make every user grant the permission again, so keep a backup of it.
+
+The certificate must be in your login keychain. To use it on another Mac, import the backup `.p12` file:
 
 ```bash
-xcodebuild -project MacMute.xcodeproj -scheme MacMute -configuration Release \
-  -derivedDataPath build ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO clean build
-mkdir -p dist
-ditto -c -k --keepParent build/Build/Products/Release/MacMute.app dist/MacMute-app.zip
-cp -R chrome-extension dist/MacMute-chrome-extension
-(cd dist && zip -qr MacMute-chrome-extension.zip MacMute-chrome-extension && rm -rf MacMute-chrome-extension)
+security import MacMute-signing.p12 -k ~/Library/Keychains/login.keychain-db -T /usr/bin/codesign
+```
+
+Build a universal app, sign it and package both downloads into `dist/`:
+
+```bash
+./scripts/release.sh
 gh release create vX.Y dist/MacMute-app.zip dist/MacMute-chrome-extension.zip
 ```
+
+To sign with another identity, set `MACMUTE_SIGNING_IDENTITY`.
