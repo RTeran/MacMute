@@ -94,16 +94,25 @@ struct ShortcutConfigView: View {
         .fixedSize(horizontal: false, vertical: true)
         .onChange(of: isRecordingMic) { isRecording in
             if !isRecording { removeMonitor(&micRecordingMonitor) }
+            updateGlobalShortcutSuspension()
         }
         .onChange(of: isRecordingCamera) { isRecording in
             if !isRecording { removeMonitor(&cameraRecordingMonitor) }
+            updateGlobalShortcutSuspension()
         }
         .onDisappear {
             isRecordingMic = false
             isRecordingCamera = false
             removeMonitor(&micRecordingMonitor)
             removeMonitor(&cameraRecordingMonitor)
+            GlobalShortcutManager.shared.setShortcutsSuspended(false)
         }
+    }
+
+    // The global event tap sees key events before this view's local monitor, so it must let
+    // them through while a shortcut is being recorded.
+    private func updateGlobalShortcutSuspension() {
+        GlobalShortcutManager.shared.setShortcutsSuspended(isRecordingMic || isRecordingCamera)
     }
 
     private func removeMonitor(_ monitor: inout Any?) {

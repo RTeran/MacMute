@@ -204,6 +204,16 @@ class GlobalShortcutManager {
         runLoopSource = nil
     }
 
+    func setShortcutsSuspended(_ suspended: Bool) {
+        guard matcher.isSuspended != suspended else { return }
+        matcher.isSuspended = suspended
+        logger.notice("Global shortcuts \(suspended ? "suspended" : "resumed", privacy: .public)")
+    }
+
+    func conflict(for candidate: Shortcut, recording target: ToggleTarget) -> ToggleTarget? {
+        matcher.conflict(for: candidate, recording: target)
+    }
+
     func updateShortcut() {
         loadShortcut()
     }
