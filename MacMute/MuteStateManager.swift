@@ -32,40 +32,29 @@ class MuteStateManager: ObservableObject {
     private static let unconfirmedColor = NSColor.systemOrange.withAlphaComponent(0.85)
 
     private let socketServer = SocketServer()
-    // Most recently active helper last. Until profiles are routed by call status, toggles go to it.
-    private var helpersByActivity: [ClientID] = []
     private let overlayManager = MenuBarOverlayManager()
     private let shortcutManager = GlobalShortcutManager.shared
-    private let logger = Logger(subsystem: "com.macmute.app", category: "toggle")
-    private lazy var toggleConfirmation: ToggleConfirmation = {
-        let confirmation = ToggleConfirmation(
+    private lazy var coordinator: MuteStateCoordinator = {
+        let coordinator = MuteStateCoordinator(
             confirmationTimeouts: .standard,
             feedbackDuration: UnconfirmedFeedback.duration,
-            confirmedState: { [unowned self] target in
-                target == .mic ? self.isMuted : self.isCameraOff
-            },
-            send: { [weak self] target, requestId, completion in
-                guard let self = self else { return completion(.failed(reason: "app_shutting_down")) }
-                guard let helper = self.helpersByActivity.last else {
-                    return completion(.failed(reason: SocketSendError.noSocketClient.rawValue))
-                }
-                self.socketServer.sendMessage(["type": target.commandType, "requestId": requestId], to: helper) { result in
-                    switch result {
-                    case .success: completion(.sent)
-                    case let .failure(error): completion(.failed(reason: error.rawValue))
-                    }
-                }
+            send: { [weak self] message, helper, completion in
+                guard let self = self else { return completion(.failure(.noSocketClient)) }
+                self.socketServer.sendMessage(message, to: helper, completion: completion)
             }
         )
-        confirmation.onUnconfirmedFeedbackStart = { [weak self] _ in
+        coordinator.onDisplayedStateChange = { [weak self] target, state in
+            self?.show(state, changed: target)
+        }
+        coordinator.onUnconfirmedFeedbackStart = { [weak self] _ in
             self?.overlayManager.showUnconfirmed(color: Self.unconfirmedColor)
             NotificationCenter.default.post(name: .unconfirmedToggleFeedbackDidStart, object: nil)
         }
-        confirmation.onUnconfirmedFeedbackEnd = { [weak self] in
+        coordinator.onUnconfirmedFeedbackEnd = { [weak self] _ in
             self?.overlayManager.hideUnconfirmed()
             NotificationCenter.default.post(name: .unconfirmedToggleFeedbackDidEnd, object: nil)
         }
-        return confirmation
+        return coordinator
     }()
 
     private init() {
@@ -74,19 +63,14 @@ class MuteStateManager: ObservableObject {
     }
 
     func start() {
-        // Setup socket server
-        socketServer.onMessageReceived = { [weak self] helper, message in
-            self?.markActive(helper)
-            self?.handleMessage(message)
-        }
         socketServer.onClientConnected = { [weak self] helper in
-            self?.logger.notice("Helper \(helper, privacy: .public) connected, requesting mic and camera state")
-            self?.markActive(helper)
-            self?.requestState(from: helper)
-            self?.requestCameraState(from: helper)
+            self?.coordinator.helperConnected(helper)
         }
         socketServer.onClientDisconnected = { [weak self] helper in
-            self?.helpersByActivity.removeAll { $0 == helper }
+            self?.coordinator.helperDisconnected(helper)
+        }
+        socketServer.onMessageReceived = { [weak self] helper, message in
+            self?.coordinator.handle(message, from: helper)
         }
         socketServer.start()
 
@@ -107,94 +91,25 @@ class MuteStateManager: ObservableObject {
     }
 
     func toggleMute() {
-        toggleConfirmation.toggle(.mic)
+        coordinator.toggle(.mic)
     }
 
     func toggleCamera() {
-        toggleConfirmation.toggle(.camera)
+        coordinator.toggle(.camera)
     }
 
-    private func markActive(_ helper: ClientID) {
-        helpersByActivity.removeAll { $0 == helper }
-        helpersByActivity.append(helper)
-    }
-
-    private func requestState(from helper: ClientID) {
-        socketServer.sendMessage(["type": "get_state"], to: helper)
-    }
-
-    private func requestCameraState(from helper: ClientID) {
-        socketServer.sendMessage(["type": "get_camera_state"], to: helper)
-    }
-
-    private func handleMessage(_ message: [String: Any]) {
-        guard let type = message["type"] as? String else {
-            logger.error("Message without type: \(String(describing: message), privacy: .public)")
-            return
-        }
-
-        switch type {
-        case "state_update":
-            if let muted = message["muted"] as? Bool {
-                toggleConfirmation.handlePassiveUpdate(.mic, newState: muted)
-                updateMicState(muted: muted)
-            }
-        case "camera_state_update":
-            if let active = message["active"] as? Bool {
-                toggleConfirmation.handlePassiveUpdate(.camera, newState: !active)
-                updateCameraState(active: active)
-            }
-        case "toggle_result":
-            handleToggleResult(message)
-        default:
-            logger.error("Unknown message type: \(type, privacy: .public)")
-        }
-    }
-
-    private func handleToggleResult(_ message: [String: Any]) {
-        guard let result = ToggleResult(message: message) else {
-            logger.error("Malformed toggle_result: \(String(describing: message), privacy: .public)")
-            return
-        }
-        if result.outcome == .failed(reason: "missing_state") {
-            logger.error("toggle_result ok without state: \(String(describing: message), privacy: .public)")
-        }
-
-        toggleConfirmation.handle(result)
-
-        guard case let .confirmed(newState) = result.outcome else { return }
-        switch result.target {
-        case .mic: updateMicState(muted: newState)
-        case .camera: updateCameraState(active: !newState)
-        }
-    }
-
-    private func updateMicState(muted: Bool) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.isMuted = muted
-            self.overlayManager.updateOverlay(
-                micMuted: self.isMuted,
-                cameraOff: self.isCameraOff,
-                micColor: NSColor(self.micMutedColor).withAlphaComponent(0.7),
-                cameraColor: NSColor(self.cameraOffColor).withAlphaComponent(0.7)
-            )
-            NotificationCenter.default.post(name: .muteStateDidChange, object: nil)
-        }
-    }
-
-    private func updateCameraState(active: Bool) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.isCameraOff = !active
-            self.overlayManager.updateOverlay(
-                micMuted: self.isMuted,
-                cameraOff: self.isCameraOff,
-                micColor: NSColor(self.micMutedColor).withAlphaComponent(0.7),
-                cameraColor: NSColor(self.cameraOffColor).withAlphaComponent(0.7)
-            )
-            NotificationCenter.default.post(name: .cameraStateDidChange, object: nil)
-        }
+    // Runs synchronously on main: the overlay must get the new state before a following
+    // hideUnconfirmed() redraws it (B14).
+    private func show(_ state: DisplayedMuteState, changed target: ToggleTarget) {
+        isMuted = state.isMuted
+        isCameraOff = state.isCameraOff
+        overlayManager.updateOverlay(
+            micMuted: isMuted,
+            cameraOff: isCameraOff,
+            micColor: NSColor(micMutedColor).withAlphaComponent(0.7),
+            cameraColor: NSColor(cameraOffColor).withAlphaComponent(0.7)
+        )
+        NotificationCenter.default.post(name: target == .mic ? .muteStateDidChange : .cameraStateDidChange, object: nil)
     }
 
     private func refreshOverlayIfVisible() {

@@ -81,6 +81,10 @@ struct CallRouter {
         toggleRecipients[target] == id
     }
 
+    func toggleRecipient(for target: ToggleTarget) -> ClientID? {
+        toggleRecipients[target]
+    }
+
     private mutating func tick() -> Int {
         clock += 1
         return clock
