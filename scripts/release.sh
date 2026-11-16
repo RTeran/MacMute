@@ -30,6 +30,8 @@ UNSAFE_ENTITLEMENTS=(
   com.apple.security.cs.allow-dyld-environment-variables
   com.apple.security.cs.disable-library-validation
   com.apple.security.cs.allow-unsigned-executable-memory
+  com.apple.security.cs.disable-executable-page-protection
+  com.apple.security.cs.allow-jit
 )
 
 entitlements_xml() {
@@ -50,12 +52,13 @@ reject_unsafe_entitlements() {
   done
 }
 
-# The app always has entitlements, so an empty or unparsable answer means the check above saw nothing.
+# The app's entitlements always set the sandbox key, so an answer without it means the check above saw nothing.
+# plutil reads dots as key path separators, hence the escapes.
 require_readable_entitlements() {
   local entitlements
   entitlements="$(entitlements_xml "$1")" || exit 1
-  if ! plutil -lint - <<<"$entitlements" >/dev/null; then
-    echo "error: cannot parse the entitlements of $1" >&2
+  if ! plutil -extract 'com\.apple\.security\.app-sandbox' raw -o - - <<<"$entitlements" >/dev/null; then
+    echo "error: cannot find the sandbox entitlement of $1" >&2
     exit 1
   fi
 }
