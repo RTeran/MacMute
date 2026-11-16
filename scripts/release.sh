@@ -6,10 +6,36 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="$ROOT/build"
 DIST="$ROOT/dist"
 APP="$BUILD/Build/Products/Release/MacMute.app"
+# SHA-1 of the signing certificate. The app and the helper trust no peer unless their own
+# certificate has this hash, so a new certificate needs a new value here.
+LEAF_PIN="ea0ccfd73df5b789344b9dfcb73d985c8be24e20"
+
+# The identity is self-signed, so `find-identity -v` hides it; a trusted one is listed twice.
+identity_sha1s() {
+  security find-identity -p codesigning |
+    awk -v id="$1" 'match($0, /[0-9A-F]{40} "/) {
+      hash = substr($0, RSTART, 40); name = substr($0, RSTART + 42); sub(/".*$/, "", name)
+      if (name == id || hash == toupper(id)) print tolower(hash)
+    }' | sort -u
+}
+
+require_pin_matches_identity() {
+  local hashes
+  hashes="$(identity_sha1s "$1")"
+  if [[ -z "$hashes" || "$hashes" == *$'\n'* ]]; then
+    echo "error: expected exactly one code signing identity named $1" >&2
+    exit 1
+  fi
+  if [[ "$hashes" != "$2" ]]; then
+    echo "error: the certificate of $1 has SHA-1 $hashes, but LEAF_PIN is $2" >&2
+    exit 1
+  fi
+}
 
 cd "$ROOT"
+require_pin_matches_identity "$IDENTITY" "$LEAF_PIN"
 xcodebuild -project MacMute.xcodeproj -scheme MacMute -configuration Release \
-  -derivedDataPath "$BUILD" ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO clean build -quiet
+  -derivedDataPath "$BUILD" ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO MACMUTE_LEAF_PIN="$LEAF_PIN" clean build -quiet
 
 # Re-sign with a stable identity so macOS keeps the Accessibility permission across updates.
 codesign --force --sign "$IDENTITY" --options runtime --identifier com.macmute.helper "$APP/Contents/Resources/MacMuteHelper"
