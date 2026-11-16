@@ -794,6 +794,10 @@ final class SocketServerTests: XCTestCase {
         var fd: Int32 = -1
         while Date() < deadline {
             fd = socket(AF_UNIX, SOCK_STREAM, 0)
+            // Set before connecting: the server may close a rejected peer before this returns.
+            var noSigPipe: Int32 = 1
+            let set = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+            XCTAssertEqual(set, 0, "SO_NOSIGPIPE: \(String(cString: strerror(errno)))", file: file, line: line)
             if connectUnix(fd, to: socketPath) == 0 { break }
             close(fd)
             fd = -1
@@ -805,8 +809,6 @@ final class SocketServerTests: XCTestCase {
         }
         var timeout = timeval(tv_sec: 0, tv_usec: 300_000)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        var noSigPipe: Int32 = 1
-        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
         clients.append(fd)
         return fd
     }
