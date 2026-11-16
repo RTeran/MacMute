@@ -7,7 +7,11 @@
   // longer receive messages, so a new injection replaces it instead of bowing out.
   const loadedInstance = window.__macMuteLoaded;
   if (loadedInstance?.isAlive?.()) return;
-  loadedInstance?.teardown?.();
+  try {
+    loadedInstance?.teardown?.();
+  } catch (error) {
+    console.warn("MacMute: could not tear down the previous content script", error?.message);
+  }
 
   // Captured at load: after a reload this object belongs to the dead context and loses its id.
   const extensionRuntime = chrome.runtime;
@@ -135,7 +139,7 @@
     attributeFilter: ["data-is-muted", "aria-label", "aria-pressed"],
   };
 
-  const togglesInProgress = new Set();
+  const togglesInProgress = new Map();
 
   // Same message type as media-session-bridge.js, which runs in the page's MAIN world.
   const MEDIA_SESSION_MESSAGE_TYPE = "macmute:media-session";
@@ -200,7 +204,7 @@
         resolve(busy);
         return;
       }
-      togglesInProgress.add(target);
+      togglesInProgress.set(target, finish);
       stopLateWait(target);
 
       const failWith = (error) =>
@@ -417,6 +421,10 @@
 
   function reportObservedState() {
     stateReportTimer = null;
+    if (!isExtensionAlive()) {
+      teardown();
+      return;
+    }
     reportDomState("mic", getMuteState());
     reportDomState("camera", getCameraState());
   }
@@ -463,6 +471,9 @@
     cancelStateReport();
     stopLateWait("mic");
     stopLateWait("camera");
+    for (const finish of [...togglesInProgress.values()]) {
+      finish({ ok: false, reason: "torn_down", before: null, after: null });
+    }
     window.removeEventListener("message", handleMediaSessionMessage);
     document.removeEventListener("visibilitychange", handleVisibilityChange);
     document.removeEventListener("DOMContentLoaded", startObserving);

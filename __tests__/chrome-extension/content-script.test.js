@@ -906,15 +906,104 @@ describe("re-injection guard (window.__macMuteLoaded)", () => {
 
   afterEach(() => {
     chrome.runtime.id = "macmute-test";
-    window.__macMuteLoaded = loadedMarker;
+    try {
+      if (window.__macMuteLoaded !== loadedMarker) window.__macMuteLoaded?.teardown?.();
+    } finally {
+      window.__macMuteLoaded = loadedMarker;
+    }
+    jest.useRealTimers();
   });
 
-  function injectAgain() {
+  const orphan = () => ({ isAlive: () => false, teardown: () => {} });
+
+  function loadFreshInstance() {
+    let instance;
     jest.isolateModules(() => {
-      require("../../chrome-extension/content-script");
+      instance = require("../../chrome-extension/content-script");
     });
-    return window.__macMuteLoaded;
+    return { instance, marker: window.__macMuteLoaded };
   }
+
+  function injectAgain() {
+    return loadFreshInstance().marker;
+  }
+
+  // The suite's own instance would also report DOM changes, hiding what the fresh one does.
+  function withSharedObserverPaused(run) {
+    script._getObserver().disconnect();
+    return Promise.resolve()
+      .then(run)
+      .finally(() => script.startObserving());
+  }
+
+  test("teardown leaves nothing that reports to the extension", () =>
+    withSharedObserverPaused(async () => {
+      jest.useFakeTimers();
+      window.__macMuteLoaded = orphan();
+      document.body.innerHTML = '<button data-is-muted="false"></button>';
+      const { marker } = loadFreshInstance();
+      const btn = document.querySelector("[data-is-muted]");
+      btn.setAttribute("data-is-muted", "true");
+      await Promise.resolve();
+      chrome.runtime.sendMessage.mockClear();
+
+      marker.teardown();
+      jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
+      window.dispatchEvent(
+        new MessageEvent("message", { data: { type: "macmute:media-session", kind: "mic", active: true }, source: window })
+      );
+      document.dispatchEvent(new Event("visibilitychange"));
+      btn.setAttribute("data-is-muted", "false");
+      await Promise.resolve();
+      jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
+
+      expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
+    }));
+
+  test("teardown ends a toggle in progress", async () => {
+    window.__macMuteLoaded = orphan();
+    document.body.innerHTML = '<button data-is-muted="false"></button>';
+    const { instance, marker } = loadFreshInstance();
+
+    const pending = instance.toggleMute();
+    marker.teardown();
+
+    expect(await pending).toEqual(expect.objectContaining({ ok: false, reason: "torn_down" }));
+  });
+
+  test("an instance whose extension context died tears itself down at its next report", () =>
+    withSharedObserverPaused(async () => {
+      jest.useFakeTimers();
+      window.__macMuteLoaded = orphan();
+      document.body.innerHTML = '<button data-is-muted="false"></button>';
+      loadFreshInstance();
+      const messageHandler = chrome.runtime.onMessage.addListener.mock.calls[0][0];
+      chrome.runtime.sendMessage.mockClear();
+
+      delete chrome.runtime.id;
+      document.querySelector("[data-is-muted]").setAttribute("data-is-muted", "true");
+      await Promise.resolve();
+      jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
+
+      expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
+      expect(chrome.runtime.onMessage.removeListener).toHaveBeenCalledWith(messageHandler);
+    }));
+
+  test("a new injection still starts when tearing down the old instance fails", () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    window.__macMuteLoaded = {
+      isAlive: () => false,
+      teardown: () => {
+        throw new Error("Extension context invalidated.");
+      },
+    };
+
+    injectAgain();
+
+    expect(chrome.runtime.onMessage.addListener).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
 
   test("the loaded instance reports itself alive while its extension context is valid", () => {
     expect(window.__macMuteLoaded.isAlive()).toBe(true);
