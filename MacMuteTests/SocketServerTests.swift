@@ -314,10 +314,13 @@ final class SocketServerTests: XCTestCase {
         server.stop()
         try FileManager.default.removeItem(at: socketDirectory)
         socketPath = socketDirectory.appendingPathComponent(String(repeating: "a", count: 120)).path
+        let failed = expectState(.failed)
         startServer()
-
+        wait(for: [failed], timeout: 2)
+        waitLongerThanARetry()
         server.stop()
 
+        XCTAssertEqual(states, [.failed])
         XCTAssertFalse(FileManager.default.fileExists(atPath: socketDirectory.path))
     }
 
@@ -342,8 +345,12 @@ final class SocketServerTests: XCTestCase {
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(at: target) }
         try FileManager.default.createSymbolicLink(at: socketDirectory, withDestinationURL: target)
+        let failed = expectState(.failed)
         startServer()
+        wait(for: [failed], timeout: 2)
+        waitLongerThanARetry()
 
+        XCTAssertEqual(states, [.failed])
         XCTAssertEqual(send(["type": "ping"], to: 1), "no_socket_client")
         XCTAssertFalse(FileManager.default.fileExists(atPath: target.appendingPathComponent("s.sock").path))
     }
@@ -404,6 +411,21 @@ final class SocketServerTests: XCTestCase {
 
         startServer()
 
+        _ = connectHelper()
+    }
+
+    func testRetriesWhileTheSocketDirectoryCannotBeCreated() throws {
+        server.stop()
+        socketPath = socketDirectory.appendingPathComponent("sub/s.sock").path
+        XCTAssertEqual(chmod(socketDirectory.path, 0o500), 0)
+        defer { chmod(socketDirectory.path, 0o700) }
+        let firstRetry = expectState(.retrying(after: 0.02))
+        startServer()
+        wait(for: [firstRetry], timeout: 2)
+
+        let listening = expectState(.listening)
+        XCTAssertEqual(chmod(socketDirectory.path, 0o700), 0)
+        wait(for: [listening], timeout: 2)
         _ = connectHelper()
     }
 
@@ -537,13 +559,13 @@ final class SocketServerTests: XCTestCase {
         XCTAssertEqual(mode?.intValue, 0o755)
     }
 
-    func testFailsToCreateTheSocketDirectoryOverAFile() throws {
+    func testRefusesASocketDirectoryPathTakenByAFile() throws {
         let file = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("mm-file-\(UUID().uuidString)")
         XCTAssertTrue(FileManager.default.createFile(atPath: file.path, contents: Data()))
         defer { try? FileManager.default.removeItem(at: file) }
 
         XCTAssertThrowsError(try SocketServer.prepareDirectory(file)) { error in
-            guard case SocketDirectoryError.operationFailed("createDirectory", _) = error else {
+            guard case SocketDirectoryError.notADirectory = error else {
                 return XCTFail("Unexpected error \(error)")
             }
         }
@@ -659,6 +681,12 @@ final class SocketServerTests: XCTestCase {
 
     private func allowRemovingTheStaleSocket() {
         XCTAssertEqual(chflags(socketPath, 0), 0)
+    }
+
+    private func waitLongerThanARetry() {
+        let settled = expectation(description: "a retry would have run")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { settled.fulfill() }
+        wait(for: [settled], timeout: 2)
     }
 
     private func inode(of path: String) throws -> ino_t {

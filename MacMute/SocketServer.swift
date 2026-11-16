@@ -113,6 +113,9 @@ class SocketServer {
         do {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: ownerOnly)
         } catch {
+            // Something already at the path is refused for what it is, not retried as an I/O error.
+            var existing = stat()
+            if lstat(url.path, &existing) == 0 { try checkOwnDirectory(url) }
             throw SocketDirectoryError.operationFailed("createDirectory", Self.errorCode(error))
         }
         // Checked before setAttributes, which follows symbolic links.
@@ -258,6 +261,9 @@ class SocketServer {
         let directory = URL(fileURLWithPath: socketPath).deletingLastPathComponent()
         do {
             try Self.prepareDirectory(directory)
+        } catch let SocketDirectoryError.operationFailed(operation, reason) {
+            failTransiently("Failed to prepare the socket directory \(directory.lastPathComponent): \(operation) failed: \(reason)")
+            return
         } catch {
             logger.fault("Not starting the socket server: unsafe socket directory \(directory.lastPathComponent, privacy: .public): \(String(describing: error), privacy: .public)")
             report(.failed)
