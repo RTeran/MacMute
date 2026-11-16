@@ -497,6 +497,7 @@
   function recheckAwaitedCallLeft() {
     if (!callLeftAwaitingVisible) return;
     callLeftAwaitingVisible = false;
+    stopWatchingPictureInPicture();
     if (callLeftTimer === null) startCallLeftWait();
   }
 
@@ -523,6 +524,7 @@
     if (hadCallControlsAtLastRead()) {
       callControlsSeen = true;
       callLeftAwaitingVisible = false;
+      stopWatchingPictureInPicture();
       cancelCallLeft();
     } else if (callControlsSeen && callLeftTimer === null && !callLeftAwaitingVisible) {
       startCallLeftWait();

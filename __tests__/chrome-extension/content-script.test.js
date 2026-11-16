@@ -1934,6 +1934,25 @@ describe("call presence", () => {
       expect(callLeftMessages()).toEqual([{ type: "call_left" }]);
     });
 
+    test.each([
+      ["the tab is shown", () => showPage()],
+      [
+        "the call controls come back",
+        async () => {
+          await replacePage(MIC_ON + CAMERA_ON);
+        },
+      ],
+    ])("stops watching the picture-in-picture window once %s", async (_case, resume) => {
+      const pictureInPictureWindow = new EventTarget();
+      const removeListener = jest.spyOn(pictureInPictureWindow, "removeEventListener");
+      installPictureInPicture({ window: pictureInPictureWindow });
+      await leaveFromHiddenTab();
+
+      await resume();
+
+      expect(removeListener).toHaveBeenCalledWith("pagehide", expect.any(Function));
+    });
+
     test("waits for the tab to be shown when reading the picture-in-picture window fails", async () => {
       installPictureInPicture({
         get window() {
