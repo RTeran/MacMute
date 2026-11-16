@@ -16,33 +16,33 @@ final class ShortcutMatcherTests: XCTestCase {
     }
 
     func testTriggersTheMicWhenKeyAndModifiersMatch() {
-        XCTAssertEqual(matcher.match(keyCode: micKey, flags: [.maskCommand, .maskShift]), .triggered(.mic))
+        XCTAssertEqual(matcher.match(keyCode: micKey, flags: [.maskCommand, .maskShift], isAutorepeat: false), .triggered(.mic))
     }
 
     func testTriggersTheCameraWhenKeyAndModifiersMatch() {
-        XCTAssertEqual(matcher.match(keyCode: cameraKey, flags: [.maskControl]), .triggered(.camera))
+        XCTAssertEqual(matcher.match(keyCode: cameraKey, flags: [.maskControl], isAutorepeat: false), .triggered(.camera))
     }
 
     func testIgnoresFlagsThatAreNotShortcutModifiers() {
         XCTAssertEqual(
-            matcher.match(keyCode: micKey, flags: [.maskCommand, .maskShift, .maskAlphaShift, .maskNonCoalesced]),
+            matcher.match(keyCode: micKey, flags: [.maskCommand, .maskShift, .maskAlphaShift, .maskNonCoalesced], isAutorepeat: false),
             .triggered(.mic)
         )
     }
 
     func testReportsAModifierMismatchWhenOnlyTheKeyMatches() {
-        XCTAssertEqual(matcher.match(keyCode: micKey, flags: [.maskCommand]), .modifiersMismatch(.mic))
-        XCTAssertEqual(matcher.match(keyCode: cameraKey, flags: []), .modifiersMismatch(.camera))
+        XCTAssertEqual(matcher.match(keyCode: micKey, flags: [.maskCommand], isAutorepeat: false), .modifiersMismatch(.mic))
+        XCTAssertEqual(matcher.match(keyCode: cameraKey, flags: [], isAutorepeat: false), .modifiersMismatch(.camera))
     }
 
     func testDoesNotMatchOtherKeys() {
-        XCTAssertEqual(matcher.match(keyCode: 0, flags: [.maskCommand, .maskShift]), .none)
+        XCTAssertEqual(matcher.match(keyCode: 0, flags: [.maskCommand, .maskShift], isAutorepeat: false), .none)
     }
 
     func testDoesNotMatchAnUnconfiguredShortcut() {
         let micOnly = ShortcutMatcher(mic: Shortcut(keyCode: micKey, modifiers: [.maskCommand]), camera: nil)
 
-        XCTAssertEqual(micOnly.match(keyCode: cameraKey, flags: [.maskControl]), .none)
+        XCTAssertEqual(micOnly.match(keyCode: cameraKey, flags: [.maskControl], isAutorepeat: false), .none)
     }
 
     func testSwallowsAutorepeatOfAMatchingShortcutWithoutTriggering() {
@@ -58,6 +58,42 @@ final class ShortcutMatcherTests: XCTestCase {
             matcher.match(keyCode: micKey, flags: [.maskCommand], isAutorepeat: true),
             .modifiersMismatch(.mic)
         )
+    }
+}
+
+final class ShortcutEventActionTests: XCTestCase {
+    private let micKey: UInt16 = 46
+    private let matcher = ShortcutMatcher(
+        mic: Shortcut(keyCode: 46, modifiers: [.maskCommand, .maskShift]),
+        camera: nil
+    )
+
+    private func keyDown(_ keyCode: UInt16, flags: CGEventFlags, autorepeat: Bool = false) -> CGEvent {
+        let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true)!
+        event.flags = flags
+        if autorepeat {
+            event.setIntegerValueField(.keyboardEventAutorepeat, value: 1)
+        }
+        return event
+    }
+
+    func testTogglesOnAFreshPressOfTheShortcut() {
+        XCTAssertEqual(matcher.action(for: keyDown(micKey, flags: [.maskCommand, .maskShift])), .toggle(.mic))
+    }
+
+    func testConsumesAnAutorepeatOfTheShortcutWithoutToggling() {
+        let event = keyDown(micKey, flags: [.maskCommand, .maskShift], autorepeat: true)
+
+        XCTAssertEqual(matcher.action(for: event), .consume)
+    }
+
+    func testPassesOtherKeysAndTheirAutorepeat() {
+        XCTAssertEqual(matcher.action(for: keyDown(0, flags: [])), .pass)
+        XCTAssertEqual(matcher.action(for: keyDown(0, flags: [], autorepeat: true)), .pass)
+    }
+
+    func testPassesTheShortcutKeyWithOtherModifiers() {
+        XCTAssertEqual(matcher.action(for: keyDown(micKey, flags: [.maskCommand])), .pass)
     }
 }
 

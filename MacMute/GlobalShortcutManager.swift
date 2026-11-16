@@ -15,6 +15,20 @@ enum ShortcutMatch: Equatable {
     case repeated(ToggleTarget)
     case modifiersMismatch(ToggleTarget)
     case none
+
+    var action: ShortcutEventAction {
+        switch self {
+        case let .triggered(target): return .toggle(target)
+        case .repeated: return .consume
+        case .modifiersMismatch, .none: return .pass
+        }
+    }
+}
+
+enum ShortcutEventAction: Equatable {
+    case toggle(ToggleTarget)
+    case consume
+    case pass
 }
 
 struct ShortcutMatcher {
@@ -23,7 +37,19 @@ struct ShortcutMatcher {
     var mic: Shortcut?
     var camera: Shortcut?
 
-    func match(keyCode: UInt16, flags: CGEventFlags, isAutorepeat: Bool = false) -> ShortcutMatch {
+    func action(for event: CGEvent) -> ShortcutEventAction {
+        match(event).action
+    }
+
+    func match(_ event: CGEvent) -> ShortcutMatch {
+        match(
+            keyCode: UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode)),
+            flags: event.flags,
+            isAutorepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+        )
+    }
+
+    func match(keyCode: UInt16, flags: CGEventFlags, isAutorepeat: Bool) -> ShortcutMatch {
         let pressed = flags.intersection(Self.relevantModifiers)
         let configured = [(ToggleTarget.mic, mic), (.camera, camera)]
             .compactMap { target, shortcut in shortcut.map { (target, $0) } }
@@ -210,10 +236,13 @@ class GlobalShortcutManager {
             return Unmanaged.passUnretained(event)
         }
 
-        let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
-        let isAutorepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
-        switch matcher.match(keyCode: keyCode, flags: event.flags, isAutorepeat: isAutorepeat) {
-        case let .triggered(target):
+        let match = matcher.match(event)
+        if case let .modifiersMismatch(target) = match {
+            logger.debug("\(target.rawValue, privacy: .public) shortcut key pressed with modifiers \(Self.describe(event.flags.intersection(ShortcutMatcher.relevantModifiers)), privacy: .public), not matching")
+        }
+
+        switch match.action {
+        case let .toggle(target):
             logger.notice("\(target.rawValue, privacy: .public) shortcut pressed")
             DispatchQueue.main.async { [weak self] in
                 switch target {
@@ -221,13 +250,10 @@ class GlobalShortcutManager {
                 case .camera: self?.onCameraShortcutTriggered?()
                 }
             }
-            return nil // Consume the event
-        case .repeated:
             return nil
-        case let .modifiersMismatch(target):
-            logger.debug("\(target.rawValue, privacy: .public) shortcut key pressed with modifiers \(Self.describe(event.flags.intersection(ShortcutMatcher.relevantModifiers)), privacy: .public), not matching")
-            return Unmanaged.passUnretained(event)
-        case .none:
+        case .consume:
+            return nil
+        case .pass:
             return Unmanaged.passUnretained(event)
         }
     }
