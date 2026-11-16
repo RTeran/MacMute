@@ -23,6 +23,9 @@ final class MuteStateCoordinator {
     var onDisplayedStateChange: ((ToggleTarget, DisplayedMuteState) -> Void)?
     var onUnconfirmedFeedbackStart: ((ToggleTarget) -> Void)?
     var onUnconfirmedFeedbackEnd: ((DisplayedMuteState) -> Void)?
+    /// Only accepted helpers count, so a server that rejects every helper still reads as disconnected.
+    var onChromeConnectionChange: ((Bool) -> Void)?
+    private(set) var isConnectedToChrome = false
 
     private(set) var displayed = DisplayedMuteState()
     private var router = CallRouter()
@@ -74,6 +77,7 @@ final class MuteStateCoordinator {
 
     func helperConnected(_ helper: ClientID) {
         router.connect(helper)
+        updateChromeConnection()
         logger.notice("Helper \(helper, privacy: .public) connected, requesting mic and camera state")
         send(["type": "get_state"], helper) { _ in }
         send(["type": "get_camera_state"], helper) { _ in }
@@ -81,6 +85,7 @@ final class MuteStateCoordinator {
 
     func helperDisconnected(_ helper: ClientID) {
         router.disconnect(helper)
+        updateChromeConnection()
         refreshDisplay()
         toggleConfirmation.failPresses(sentTo: helper, reason: "helper_disconnected")
     }
@@ -146,6 +151,13 @@ final class MuteStateCoordinator {
     }
 
     // An unknown state shows as not active: a false "muted" while the mic is live is the dangerous error.
+    private func updateChromeConnection() {
+        let connected = router.hasHelpers
+        guard connected != isConnectedToChrome else { return }
+        isConnectedToChrome = connected
+        onChromeConnectionChange?(connected)
+    }
+
     private func refreshDisplay() {
         let profile = router.selected.flatMap(router.profile) ?? CallRouter.Profile()
         for target in [ToggleTarget.mic, .camera] {

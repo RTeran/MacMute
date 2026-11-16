@@ -69,6 +69,21 @@ final class MuteStateCoordinatorTests: XCTestCase {
         XCTAssertEqual(sent.compactMap { $0.message["type"] as? String }, ["get_state", "get_camera_state"])
     }
 
+    func testIsConnectedToChromeWhileAnyHelperIsAccepted() {
+        var changes: [Bool] = []
+        coordinator.onChromeConnectionChange = { changes.append($0) }
+        XCTAssertFalse(coordinator.isConnectedToChrome)
+
+        coordinator.helperConnected(1)
+        coordinator.helperConnected(2)
+        coordinator.helperDisconnected(1)
+        XCTAssertTrue(coordinator.isConnectedToChrome)
+        coordinator.helperDisconnected(2)
+
+        XCTAssertFalse(coordinator.isConnectedToChrome)
+        XCTAssertEqual(changes, [true, false])
+    }
+
     // MARK: - A single helper behaves as before
 
     func testASingleHelperDrivesTheIndicatorAndReceivesToggles() {

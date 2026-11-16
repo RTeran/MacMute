@@ -38,6 +38,8 @@ struct CallRouter {
         }?.key
     }
 
+    var hasHelpers: Bool { !entries.isEmpty }
+
     func profile(_ id: ClientID) -> Profile? {
         entries[id]?.profile
     }
