@@ -394,6 +394,28 @@ final class PeerCodeVerifierTests: XCTestCase {
         XCTAssertNoThrow(try PeerCodeVerifier.verify(socket: sockets[0], against: trusted).get())
     }
 
+    func testUsesTheKernelValuesOfTheDebuggableFlags() {
+        XCTAssertEqual(PeerCodeVerifier.getTaskAllowFlag, 0x4)
+        XCTAssertEqual(PeerCodeVerifier.debuggedFlag, 0x1000_0000)
+    }
+
+    func testRejectsADebuggableTrustedPeerThroughTheStatusReader() throws {
+        let requirement = try ownDesignatedRequirement()
+
+        let result = PeerCodeVerifier.verify(
+            socket: sockets[0], against: TrustedPeer(requirement: requirement, requiresHardenedRuntime: true),
+            statusReader: { _ in .success(self.runtimeFlag | PeerCodeVerifier.getTaskAllowFlag) }
+        )
+
+        XCTAssertEqual(result.failure, .peerIsDebuggable)
+    }
+
+    func testRejectsAStatusOfTheWrongType() {
+        let information: [String: Any] = [kSecCodeInfoStatus as String: "65536"]
+
+        XCTAssertEqual(PeerCodeVerifier.codeStatus(from: information).failure, .securityCallReturnedNothing("kSecCodeInfoStatus"))
+    }
+
     func testReportsThePeerProcessId() {
         XCTAssertEqual(PeerCodeVerifier.peerProcessID(of: sockets[0]), getpid())
     }
