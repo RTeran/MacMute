@@ -294,13 +294,13 @@ final class MuteStateCoordinatorTests: XCTestCase {
         XCTAssertFalse(confirmationTimer().isCancelled)
     }
 
-    func testTheRecipientsStateChangeConfirmsTheToggle() {
+    func testTheRecipientsStateChangeShowsTheStateWithoutConfirmingTheToggle() {
         connectWithMic(1, muted: false)
         coordinator.toggle(.mic)
 
         coordinator.handle(["type": "state_update", "muted": true], from: 1)
 
-        XCTAssertTrue(confirmationTimer().isCancelled)
+        XCTAssertFalse(confirmationTimer().isCancelled)
         XCTAssertTrue(coordinator.displayed.isMuted)
     }
 
@@ -464,14 +464,40 @@ final class MuteStateCoordinatorTests: XCTestCase {
 
     // MARK: - B14
 
-    func testTheIndicatorShowsTheConfirmedStateWhenTheWarningEnds() {
+    func testALateStateShowsTheNewStateButKeepsTheWarning() {
         connectWithMic(1, muted: false)
         coordinator.toggle(.mic)
         confirmationTimer().fire()
 
         coordinator.handle(["type": "state_update", "muted": true], from: 1)
 
-        XCTAssertEqual(events.last, "amber end muted=true cameraOff=false")
+        XCTAssertEqual(events.suffix(2), ["amber mic", "mic muted=true cameraOff=false"])
+    }
+
+    func testALateStateOfATimedOutPressDoesNotConfirmTheNextPressThatFailsLater() {
+        connectWithMic(1, muted: false)
+        coordinator.toggle(.mic)
+        confirmationTimer().fire()
+        coordinator.toggle(.mic)
+
+        coordinator.handle(["type": "state_update", "muted": true], from: 1)
+        XCTAssertFalse(confirmationTimer().isCancelled)
+        coordinator.handle(toggleResult(.mic, "r2", ok: false, reason: "button_not_found"), from: 1)
+
+        XCTAssertEqual(events.suffix(2), ["mic muted=true cameraOff=false", "amber mic"])
+    }
+
+    func testALateStateOfATimedOutPressDoesNotConfirmTheNextPressThatReportsTheOldState() {
+        connectWithMic(1, muted: false)
+        coordinator.toggle(.mic)
+        confirmationTimer().fire()
+        coordinator.toggle(.mic)
+
+        coordinator.handle(["type": "state_update", "muted": true], from: 1)
+        XCTAssertFalse(confirmationTimer().isCancelled)
+        coordinator.handle(toggleResult(.mic, "r2", ok: true, newState: false), from: 1)
+
+        XCTAssertEqual(events.suffix(2), ["mic muted=false cameraOff=false", "amber mic"])
     }
 
     func testALateToggleResultShowsTheConfirmedStateWhenTheWarningEnds() {
@@ -496,7 +522,7 @@ final class MuteStateCoordinatorTests: XCTestCase {
         XCTAssertEqual(Array(events.suffix(2)), ["mic muted=true cameraOff=false", "amber end muted=true cameraOff=false"])
     }
 
-    func testALateCameraStateShowsTheConfirmedStateWhenTheWarningEnds() {
+    func testALateCameraStateShowsTheNewStateButKeepsTheWarning() {
         coordinator.helperConnected(1)
         coordinator.handle(["type": "camera_state_update", "active": true], from: 1)
         coordinator.toggle(.camera)
@@ -504,7 +530,7 @@ final class MuteStateCoordinatorTests: XCTestCase {
 
         coordinator.handle(["type": "camera_state_update", "active": false], from: 1)
 
-        XCTAssertEqual(events.last, "amber end muted=false cameraOff=true")
+        XCTAssertEqual(events.suffix(2), ["amber camera", "camera muted=false cameraOff=true"])
     }
 
     // MARK: - Helpers

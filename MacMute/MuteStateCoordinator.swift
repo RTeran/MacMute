@@ -55,8 +55,8 @@ final class MuteStateCoordinator {
         toggleConfirmation.onUnconfirmedFeedbackEnd = { [unowned self] in
             self.onUnconfirmedFeedbackEnd?(self.displayed)
         }
-        toggleConfirmation.onConfirmed = { [unowned self] target, newState in
-            guard let recipient = self.router.toggleRecipient(for: target) else {
+        toggleConfirmation.onConfirmed = { [unowned self] target, newState, recipient in
+            guard let recipient else {
                 self.logger.fault("Confirmed a \(target.rawValue, privacy: .public) toggle that has no recipient")
                 assertionFailure("Confirmed a toggle that has no recipient")
                 return
@@ -87,9 +87,7 @@ final class MuteStateCoordinator {
     func helperDisconnected(_ helper: ClientID) {
         router.disconnect(helper)
         refreshDisplay()
-        for target in toggleConfirmation.failPresses(sentTo: helper, reason: "helper_disconnected") {
-            logger.error("Helper \(helper, privacy: .public) disconnected with a \(target.rawValue, privacy: .public) press outstanding")
-        }
+        toggleConfirmation.failPresses(sentTo: helper, reason: "helper_disconnected")
     }
 
     func handle(_ message: [String: Any], from helper: ClientID) {
@@ -116,22 +114,21 @@ final class MuteStateCoordinator {
         }
     }
 
-    // The new state is shown before the confirmation runs: ending the amber warning redraws the
-    // indicator, which must already show the state that ended it.
     private func handleState(_ target: ToggleTarget, _ state: Bool, from helper: ClientID) {
         router.recordState(target, state, from: helper)
         refreshDisplay()
-        toggleConfirmation.handlePassiveUpdate(target, newState: state, from: helper)
     }
 
     private func handleToggleResult(_ message: [String: Any], from helper: ClientID) {
         guard let result = ToggleResult(message: message) else { return logMalformed(message, from: helper) }
+        // The new state is shown before the confirmation runs: ending the amber warning redraws the
+        // indicator, which must already show the state that ended it.
         if case let .confirmed(newState) = result.outcome {
             router.recordState(result.target, newState, from: helper)
             refreshDisplay()
         }
         if result.outcome == .failed(reason: "missing_state") {
-            let level: OSLogType = router.isToggleRecipient(helper, for: result.target) ? .error : .default
+            let level: OSLogType = toggleConfirmation.isOutstandingPress(result, from: helper) ? .error : .default
             logger.log(level: level, "toggle_result ok without state from helper \(helper, privacy: .public): \(preview(message), privacy: .public)")
         }
         toggleConfirmation.handle(result, from: helper)
