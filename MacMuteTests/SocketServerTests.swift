@@ -16,9 +16,11 @@ final class SocketServerTests: XCTestCase {
         startServer()
     }
 
+    // Closing the helpers first makes a write that regressed to blocking fail with EPIPE, so the
+    // suite goes red instead of hanging in stop().
     override func tearDown() {
-        server.stop()
         clients.forEach { close($0) }
+        server.stop()
         unlink(socketPath)
         super.tearDown()
     }
@@ -26,8 +28,12 @@ final class SocketServerTests: XCTestCase {
     private func startServer(maxClients: Int = SocketServer.defaultMaxClients) {
         server = SocketServer(socketPath: socketPath, maxClients: maxClients)
         server.onClientConnected = { [weak self] id in
-            self?.connectedIDs.append(id)
-            self?.connections.removeFirst().fulfill()
+            guard let self else { return }
+            self.connectedIDs.append(id)
+            guard !self.connections.isEmpty else {
+                return XCTFail("Unexpected helper \(id) connected")
+            }
+            self.connections.removeFirst().fulfill()
         }
         server.onClientDisconnected = { [weak self] id in
             self?.disconnections.removeValue(forKey: id)?.fulfill()
@@ -80,8 +86,37 @@ final class SocketServerTests: XCTestCase {
 
         let (second, secondID) = connectHelper()
 
+        XCTAssertNotEqual(secondID, firstID)
+        XCTAssertEqual(send(["type": "ping"], to: firstID), "no_socket_client")
         XCTAssertEqual(send(["type": "pong"], to: secondID), "sent")
         XCTAssertEqual(readLine(from: second), #"{"type":"pong"}"#)
+    }
+
+    func testStopClosesTheHelperConnections() {
+        let (helper, _) = connectHelper()
+
+        server.stop()
+
+        XCTAssertTrue(waitForEndOfStream(on: helper))
+    }
+
+    func testFramesLinesPerHelperAcrossAndWithinWrites() {
+        let (first, firstID) = connectHelper()
+        let (second, secondID) = connectHelper()
+        messageArrived = expectation(description: "messages received")
+        messageArrived?.expectedFulfillmentCount = 4
+
+        writeRaw(#"{"type":"a","#, to: first)
+        writeRaw(#"{"type":"b"#, to: second)
+        writeRaw(#""n":1}"#, to: first)
+        writeRaw("\n" + #"{"type":"c"}"# + "\n", to: first)
+        writeRaw(#""}"# + "\n" + #"{"type":"d"}"# + "\n", to: second)
+        wait(for: [messageArrived!], timeout: 2)
+
+        let fromFirst = received.filter { $0.0 == firstID }.compactMap { $0.1["type"] as? String }
+        let fromSecond = received.filter { $0.0 == secondID }.compactMap { $0.1["type"] as? String }
+        XCTAssertEqual(fromFirst, ["a", "c"])
+        XCTAssertEqual(fromSecond, ["b", "d"])
     }
 
     func testClosesHelpersBeyondTheLimitAndKeepsTheOthers() {
@@ -127,8 +162,9 @@ final class SocketServerTests: XCTestCase {
     func testStopReturnsWhileAHelperIsNotReading() {
         let (_, stuckID) = connectHelper()
         let bulky: [String: Any] = ["type": "bulk", "padding": String(repeating: "x", count: 32 * 1024)]
-        for _ in 0..<4 {
-            server.sendMessage(bulky, to: stuckID)
+        var outcome = send(bulky, to: stuckID)
+        for _ in 0..<100 where outcome == "sent" {
+            outcome = send(bulky, to: stuckID)
         }
         let stopped = expectation(description: "stop returned")
 
@@ -200,7 +236,11 @@ final class SocketServerTests: XCTestCase {
     }
 
     private func writeLine(_ line: String, to fd: Int32) {
-        let bytes = Array((line + "\n").utf8)
+        writeRaw(line + "\n", to: fd)
+    }
+
+    private func writeRaw(_ text: String, to fd: Int32) {
+        let bytes = Array(text.utf8)
         _ = bytes.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
     }
 
