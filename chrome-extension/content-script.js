@@ -312,7 +312,8 @@
     try {
       const state = queriedState(target, readState);
       if (state !== null) reportState(target, state);
-      sendResponse({ inCall: hasCallControls() });
+      // Inside the grace period the controls may be gone for a moment; only call_left ends the call.
+      sendResponse({ inCall: hasCallControls() || callControlsSeen });
     } catch (error) {
       console.warn(`MacMute: could not read the ${target} state`, error?.message);
       sendResponse({ inCall: false, error: true });
@@ -616,6 +617,7 @@
 
   function teardown() {
     tornDown = true;
+    callControlsSeen = false;
     observer.disconnect();
     cancelStateReport();
     cancelCallLeft();

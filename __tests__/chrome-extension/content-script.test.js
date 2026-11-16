@@ -2027,6 +2027,32 @@ describe("call presence", () => {
     warn.mockRestore();
   });
 
+  test.each(["get_state", "get_camera_state"])(
+    "answers %s as in the call while the controls are briefly gone",
+    async (type) => {
+      document.body.innerHTML = MIC_ON + CAMERA_ON;
+      script.startObserving();
+      await replacePage("<div>Loading</div>");
+      const sendResponse = jest.fn();
+
+      messageListener({ type }, {}, sendResponse);
+
+      expect(sendResponse).toHaveBeenCalledWith({ inCall: true });
+    }
+  );
+
+  test.each(["get_state", "get_camera_state"])("answers %s as out of the call once call_left was sent", async (type) => {
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+    await leaveCall();
+    const sendResponse = jest.fn();
+
+    messageListener({ type }, {}, sendResponse);
+
+    expect(callLeftMessages()).toEqual([{ type: "call_left" }]);
+    expect(sendResponse).toHaveBeenCalledWith({ inCall: false });
+  });
+
   test.each(["get_state", "get_camera_state"])("still answers %s when reading the page fails", (type) => {
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
     const querySelector = jest.spyOn(document, "querySelector").mockImplementation(() => {
