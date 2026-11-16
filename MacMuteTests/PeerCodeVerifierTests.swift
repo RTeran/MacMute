@@ -394,7 +394,7 @@ final class PeerCodeVerifierTests: XCTestCase {
         XCTAssertTrue(PeerVerificationError.peerIsDebuggable.description.contains("debugger"))
     }
 
-    func testTheRunningAdHocTestHostUsesTheAdHocBranchWithoutInjection() throws {
+    func testTheRunningAdHocTestHostUsesTheAdHocBranchWithTheEmptyPin() throws {
         _ = try adHocTestBundle()
 
         let trusted = try PeerCodeVerifier.trustedHelperRequirement(
