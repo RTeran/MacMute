@@ -82,7 +82,7 @@ final class SocketClient {
         let home = FileManager.default.homeDirectoryForCurrentUser
         self.init(
             socketPath: home.appendingPathComponent("Library/Application Support/MacMute/macmute.sock").path,
-            makeVerifyApp: Self.trustedAppCheck(ownCode: PeerCodeVerifier.ownStaticCode)
+            makeVerifyApp: Self.trustedAppCheck(ownCode: PeerCodeVerifier.ownCode)
         )
     }
 
@@ -102,15 +102,19 @@ final class SocketClient {
         self.maxConnectionsWithoutData = maxConnectionsWithoutData
     }
 
-    static func trustedAppCheck(ownCode: @escaping () -> Result<SecStaticCode, PeerVerificationError>) -> MakeVerifyApp {
+    static func trustedAppCheck(ownCode: @escaping () -> Result<OwnCode, PeerVerificationError>) -> MakeVerifyApp {
         {
-            ownCode().flatMap { helper in
-                PeerCodeVerifier.path(of: helper).flatMap { path -> Result<TrustedPeer, PeerVerificationError> in
-                    guard let app = PeerCodeVerifier.containingApp(ofHelperAt: path) else { return .failure(.notInsideAnApp) }
-                    return PeerCodeVerifier.trustedAppRequirement(signedLike: helper, appIdentifier: PeerCodeVerifier.appIdentifier, containingApp: app)
-                }
+            trustedApp(ownCode: ownCode)
+                .map { trusted in { socket in PeerCodeVerifier.verify(socket: socket, against: trusted) } }
+        }
+    }
+
+    static func trustedApp(ownCode: () -> Result<OwnCode, PeerVerificationError>) -> Result<TrustedPeer, PeerVerificationError> {
+        ownCode().flatMap { helper in
+            PeerCodeVerifier.path(of: helper.staticCode).flatMap { path in
+                guard let app = PeerCodeVerifier.containingApp(ofHelperAt: path) else { return .failure(.notInsideAnApp) }
+                return PeerCodeVerifier.trustedAppRequirement(signedLike: helper, appIdentifier: PeerCodeVerifier.appIdentifier, containingApp: app)
             }
-            .map { trusted in { socket in PeerCodeVerifier.verify(socket: socket, against: trusted) } }
         }
     }
 

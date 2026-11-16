@@ -49,7 +49,7 @@ final class PeerCodeVerifierTests: XCTestCase {
 
     // /bin/ls stands in for both the app and the helper: it carries a certificate chain and its own identifier.
     func testAnAppWithACertificateTrustsCodeWithTheIdentifierSignedByTheSameLeaf() throws {
-        let signed = try staticCode(at: URL(fileURLWithPath: "/bin/ls"))
+        let signed = try certificateSignedCode()
         let missingHelper = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("missing-\(UUID().uuidString)")
 
         let requirement = try PeerCodeVerifier.trustedHelperRequirement(
@@ -57,22 +57,22 @@ final class PeerCodeVerifierTests: XCTestCase {
         ).get()
 
         let text = try requirementText(requirement.requirement)
-        XCTAssertEqual(SecStaticCodeCheckValidity(signed, [], requirement.requirement), errSecSuccess, text)
+        XCTAssertEqual(SecStaticCodeCheckValidity(signed.staticCode, [], requirement.requirement), errSecSuccess, text)
     }
 
     func testAnAppWithACertificateRejectsCodeWithAnotherIdentifier() throws {
-        let signed = try staticCode(at: URL(fileURLWithPath: "/bin/ls"))
+        let signed = try certificateSignedCode()
         let missingHelper = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("missing-\(UUID().uuidString)")
 
         let requirement = try PeerCodeVerifier.trustedHelperRequirement(
             signedLike: signed, helperIdentifier: "com.macmute.helper", bundledHelper: missingHelper
         ).get()
 
-        XCTAssertEqual(SecStaticCodeCheckValidity(signed, [], requirement.requirement), errSecCSReqFailed)
+        XCTAssertEqual(SecStaticCodeCheckValidity(signed.staticCode, [], requirement.requirement), errSecCSReqFailed)
     }
 
     func testReportsARequirementThatCannotBeBuilt() throws {
-        let signedApp = try staticCode(at: URL(fileURLWithPath: "/bin/ls"))
+        let signedApp = try certificateSignedCode()
         let missingHelper = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("missing-\(UUID().uuidString)")
 
         let result = PeerCodeVerifier.trustedHelperRequirement(
@@ -130,7 +130,7 @@ final class PeerCodeVerifierTests: XCTestCase {
 
     func testReadsTheSignatureOfTheRunningCode() throws {
         var path: CFURL?
-        XCTAssertEqual(SecCodeCopyPath(try PeerCodeVerifier.ownStaticCode().get(), [], &path), errSecSuccess)
+        XCTAssertEqual(SecCodeCopyPath(try PeerCodeVerifier.ownCode().get().staticCode, [], &path), errSecSuccess)
 
         XCTAssertEqual(try XCTUnwrap(path) as URL, try ownCodeURL())
     }
@@ -157,7 +157,7 @@ final class PeerCodeVerifierTests: XCTestCase {
     }
 
     func testAHelperWithACertificateTrustsAnAppWithTheIdentifierSignedByTheSameLeaf() throws {
-        let signed = try staticCode(at: URL(fileURLWithPath: "/bin/ls"))
+        let signed = try certificateSignedCode()
         let missingApp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("missing-\(UUID().uuidString).app")
 
         let requirement = try PeerCodeVerifier.trustedAppRequirement(
@@ -165,18 +165,18 @@ final class PeerCodeVerifierTests: XCTestCase {
         ).get()
 
         let text = try requirementText(requirement.requirement)
-        XCTAssertEqual(SecStaticCodeCheckValidity(signed, [], requirement.requirement), errSecSuccess, text)
+        XCTAssertEqual(SecStaticCodeCheckValidity(signed.staticCode, [], requirement.requirement), errSecSuccess, text)
     }
 
     func testAHelperWithACertificateRejectsAnAppWithAnotherIdentifier() throws {
-        let signed = try staticCode(at: URL(fileURLWithPath: "/bin/ls"))
+        let signed = try certificateSignedCode()
         let missingApp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("missing-\(UUID().uuidString).app")
 
         let requirement = try PeerCodeVerifier.trustedAppRequirement(
             signedLike: signed, appIdentifier: PeerCodeVerifier.appIdentifier, containingApp: missingApp
         ).get()
 
-        XCTAssertEqual(SecStaticCodeCheckValidity(signed, [], requirement.requirement), errSecCSReqFailed)
+        XCTAssertEqual(SecStaticCodeCheckValidity(signed.staticCode, [], requirement.requirement), errSecCSReqFailed)
     }
 
     func testAnAdHocHelperTrustsTheDesignatedRequirementOfTheContainingApp() throws {
@@ -212,28 +212,31 @@ final class PeerCodeVerifierTests: XCTestCase {
     }
 
     func testAcceptsAPeerWithTheHardenedRuntimeWhenItIsRequired() {
-        XCTAssertNoThrow(try PeerCodeVerifier.hardenedRuntimeCheck(codeStatus: 0x10000 | 0x2, required: true).get())
+        XCTAssertNoThrow(try PeerCodeVerifier.hardenedRuntimeCheck(codeStatus: runtimeFlag | adHocFlag, required: true).get())
     }
 
     func testRejectsAPeerWithoutTheHardenedRuntimeWhenItIsRequired() {
-        let result = PeerCodeVerifier.hardenedRuntimeCheck(codeStatus: 0x2, required: true)
+        let result = PeerCodeVerifier.hardenedRuntimeCheck(codeStatus: adHocFlag, required: true)
 
         XCTAssertEqual(result.failure, .peerWithoutHardenedRuntime)
     }
 
-    func testRejectsAPeerWithAnUnknownStatusWhenTheHardenedRuntimeIsRequired() {
-        let result = PeerCodeVerifier.hardenedRuntimeCheck(codeStatus: nil, required: true)
+    func testReportsSigningInformationWithoutAStatus() {
+        XCTAssertEqual(PeerCodeVerifier.codeStatus(from: [:]).failure, .securityCallReturnedNothing("kSecCodeInfoStatus"))
+    }
 
-        XCTAssertEqual(result.failure, .peerWithoutHardenedRuntime)
+    func testReadsTheStatusFromSigningInformation() throws {
+        let information: [String: Any] = [kSecCodeInfoStatus as String: NSNumber(value: runtimeFlag)]
+
+        XCTAssertEqual(try PeerCodeVerifier.codeStatus(from: information).get(), runtimeFlag)
     }
 
     func testIgnoresTheHardenedRuntimeWhenItIsNotRequired() {
-        XCTAssertNoThrow(try PeerCodeVerifier.hardenedRuntimeCheck(codeStatus: 0x2, required: false).get())
-        XCTAssertNoThrow(try PeerCodeVerifier.hardenedRuntimeCheck(codeStatus: nil, required: false).get())
+        XCTAssertNoThrow(try PeerCodeVerifier.hardenedRuntimeCheck(codeStatus: adHocFlag, required: false).get())
     }
 
     func testAnAppWithACertificateRequiresTheHardenedRuntimeFromTheHelper() throws {
-        let signed = try staticCode(at: URL(fileURLWithPath: "/bin/ls"))
+        let signed = try certificateSignedCode()
         let missingHelper = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("missing-\(UUID().uuidString)")
 
         let trusted = try PeerCodeVerifier.trustedHelperRequirement(
@@ -244,7 +247,7 @@ final class PeerCodeVerifierTests: XCTestCase {
     }
 
     func testAHelperWithACertificateRequiresTheHardenedRuntimeFromTheApp() throws {
-        let signed = try staticCode(at: URL(fileURLWithPath: "/bin/ls"))
+        let signed = try certificateSignedCode()
         let missingApp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("missing-\(UUID().uuidString).app")
 
         let trusted = try PeerCodeVerifier.trustedAppRequirement(
@@ -302,6 +305,73 @@ final class PeerCodeVerifierTests: XCTestCase {
         XCTAssertTrue(PeerVerificationError.peerWithoutHardenedRuntime.description.contains("hardened runtime"))
     }
 
+    func testALiveAdHocProcessWithoutACertificateUsesTheAdHocBranch() {
+        XCTAssertEqual(try PeerCodeVerifier.trustBranch(liveStatus: adHocFlag, hasLeaf: false).get(), .adHoc)
+    }
+
+    func testALiveCertificateProcessWithALeafUsesTheCertificateBranch() {
+        XCTAssertEqual(try PeerCodeVerifier.trustBranch(liveStatus: runtimeFlag, hasLeaf: true).get(), .certificate)
+    }
+
+    func testALiveCertificateProcessWithoutALeafOnDiskIsAnError() {
+        XCTAssertEqual(PeerCodeVerifier.trustBranch(liveStatus: runtimeFlag, hasLeaf: false).failure, .ownSigningModeMismatch(runningAdHoc: false))
+    }
+
+    func testALiveAdHocProcessWithALeafOnDiskIsAnError() {
+        XCTAssertEqual(PeerCodeVerifier.trustBranch(liveStatus: adHocFlag, hasLeaf: true).failure, .ownSigningModeMismatch(runningAdHoc: true))
+    }
+
+    func testSwappingTheBundleForAnAdHocCopyDoesNotDropTheCertificateChecks() throws {
+        let adHocOnDisk = try adHocTestBundle().staticCode
+        let runningWithCertificate = OwnCode(staticCode: adHocOnDisk, liveStatus: runtimeFlag)
+
+        let result = PeerCodeVerifier.trustedHelperRequirement(
+            signedLike: runningWithCertificate, helperIdentifier: "com.macmute.helper", bundledHelper: try ownCodeURL()
+        )
+
+        XCTAssertEqual(result.failure, .ownSigningModeMismatch(runningAdHoc: false))
+    }
+
+    func testDescribesASigningModeMismatch() {
+        XCTAssertTrue(PeerVerificationError.ownSigningModeMismatch(runningAdHoc: false).description.contains("certificate"))
+    }
+
+    func testReportsAPeerStatusThatCannotBeRead() throws {
+        let requirement = try ownDesignatedRequirement()
+
+        let result = PeerCodeVerifier.verify(
+            socket: sockets[0], against: TrustedPeer(requirement: requirement, requiresHardenedRuntime: true),
+            statusReader: { _ in .failure(.peerStatusUnavailable(errSecCSInvalidObjectRef)) }
+        )
+
+        XCTAssertEqual(result.failure, .peerStatusUnavailable(errSecCSInvalidObjectRef))
+        XCTAssertTrue(PeerVerificationError.peerStatusUnavailable(errSecCSInvalidObjectRef).description.contains("\(errSecCSInvalidObjectRef)"))
+    }
+
+    func testDoesNotReadTheStatusOfAnUntrustedPeer() throws {
+        var requirement: SecRequirement?
+        XCTAssertEqual(SecRequirementCreateWithString(#"identifier "com.macmute.helper""# as CFString, [], &requirement), errSecSuccess)
+        var statusWasRead = false
+
+        _ = PeerCodeVerifier.verify(
+            socket: sockets[0], against: TrustedPeer(requirement: try XCTUnwrap(requirement), requiresHardenedRuntime: true),
+            statusReader: { _ in statusWasRead = true; return .success(self.runtimeFlag) }
+        )
+
+        XCTAssertFalse(statusWasRead)
+    }
+
+    func testAcceptsATrustedPeerThatRunsWithTheHardenedRuntime() throws {
+        let requirement = try ownDesignatedRequirement()
+
+        let result = PeerCodeVerifier.verify(
+            socket: sockets[0], against: TrustedPeer(requirement: requirement, requiresHardenedRuntime: true),
+            statusReader: { _ in .success(self.runtimeFlag) }
+        )
+
+        XCTAssertNoThrow(try result.get())
+    }
+
     func testReportsThePeerProcessId() {
         XCTAssertEqual(PeerCodeVerifier.peerProcessID(of: sockets[0]), getpid())
     }
@@ -319,7 +389,7 @@ final class PeerCodeVerifierTests: XCTestCase {
         let staticView = unsafeBitCast(try XCTUnwrap(code), to: SecStaticCode.self)
         XCTAssertEqual(SecCodeCopySigningInformation(staticView, SecCSFlags(rawValue: kSecCSDynamicInformation), &info), errSecSuccess)
         let status = ((info as? [String: Any])?[kSecCodeInfoStatus as String] as? NSNumber)?.uint32Value ?? 0
-        return status & 0x10000 != 0
+        return status & runtimeFlag != 0
     }
 
     private func staticCode(at url: URL) throws -> SecStaticCode {
@@ -328,14 +398,22 @@ final class PeerCodeVerifierTests: XCTestCase {
         return try XCTUnwrap(code)
     }
 
-    private func adHocTestBundle() throws -> SecStaticCode {
+    private var runtimeFlag: UInt32 { SecCodeSignatureFlags.runtime.rawValue }
+    private var adHocFlag: UInt32 { SecCodeSignatureFlags.adhoc.rawValue }
+
+    // /bin/ls as the running code of a certificate-signed release.
+    private func certificateSignedCode() throws -> OwnCode {
+        OwnCode(staticCode: try staticCode(at: URL(fileURLWithPath: "/bin/ls")), liveStatus: runtimeFlag)
+    }
+
+    private func adHocTestBundle() throws -> OwnCode {
         let code = try staticCode(at: Bundle(for: Self.self).bundleURL)
         var info: CFDictionary?
         XCTAssertEqual(SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info), errSecSuccess)
         if let certificates = (info as? [String: Any])?[kSecCodeInfoCertificates as String] as? [Any], !certificates.isEmpty {
             throw XCTSkip("The test bundle is signed with a certificate; these tests need an ad-hoc one")
         }
-        return code
+        return OwnCode(staticCode: code, liveStatus: adHocFlag)
     }
 
     private func requirementText(_ requirement: SecRequirement) throws -> String {

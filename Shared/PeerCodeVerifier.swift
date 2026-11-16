@@ -14,6 +14,7 @@ enum PeerVerificationError: Error, Equatable, CustomStringConvertible {
     case peerWithoutHardenedRuntime
     case notInsideAnApp
     case ownPathUnavailable(OSStatus)
+    case ownSigningModeMismatch(runningAdHoc: Bool)
     case securityCallReturnedNothing(String)
 
     var description: String {
@@ -41,6 +42,10 @@ enum PeerVerificationError: Error, Equatable, CustomStringConvertible {
             return "the helper is not in the Contents/Resources folder of an app"
         case let .ownPathUnavailable(status):
             return "cannot read where this helper's code is (OSStatus \(status))"
+        case let .ownSigningModeMismatch(runningAdHoc):
+            return runningAdHoc
+                ? "this app runs ad-hoc signed but its signature on disk has a certificate"
+                : "this app runs signed with a certificate but its signature on disk has none"
         case let .securityCallReturnedNothing(function):
             return "\(function) reported success but returned nothing usable"
         }
@@ -54,6 +59,17 @@ struct TrustedPeer {
     let requiresHardenedRuntime: Bool
 }
 
+/// The status comes from the running process and cannot be changed by replacing files on disk.
+struct OwnCode {
+    let staticCode: SecStaticCode
+    let liveStatus: UInt32
+}
+
+enum TrustBranch: Equatable {
+    case certificate
+    case adHoc
+}
+
 /// Checks that the process at the other end of a Unix socket runs trusted code. The trusted
 /// requirement is derived from signatures instead of hard-coded hashes, so the same check works
 /// for ad-hoc Debug builds and for the signed release.
@@ -65,7 +81,7 @@ enum PeerCodeVerifier {
 
     /// The on-disk copy decides what is trusted, so it is used only after the running code has been
     /// checked against it.
-    static func ownStaticCode() -> Result<SecStaticCode, PeerVerificationError> {
+    static func ownCode() -> Result<OwnCode, PeerVerificationError> {
         var code: SecCode?
         var status = SecCodeCopySelf([], &code)
         guard status == errSecSuccess else { return .failure(.ownSignatureUnavailable(status)) }
@@ -76,7 +92,23 @@ enum PeerCodeVerifier {
         status = SecCodeCopyStaticCode(code, [], &staticCode)
         guard status == errSecSuccess else { return .failure(.ownSignatureUnavailable(status)) }
         guard let staticCode else { return .failure(.securityCallReturnedNothing("SecCodeCopyStaticCode")) }
-        return .success(staticCode)
+        return liveStatus(of: code)
+            .mapError { error in
+                if case let .peerStatusUnavailable(status) = error { return .ownSignatureUnavailable(status) }
+                return error
+            }
+            .map { OwnCode(staticCode: staticCode, liveStatus: $0) }
+    }
+
+    /// The branch follows how this process is really signed, so swapping the bundle on disk for an
+    /// ad-hoc copy cannot drop the certificate and hardened runtime checks.
+    static func trustBranch(liveStatus: UInt32, hasLeaf: Bool) -> Result<TrustBranch, PeerVerificationError> {
+        let runningAdHoc = liveStatus & SecCodeSignatureFlags.adhoc.rawValue != 0
+        switch (runningAdHoc, hasLeaf) {
+        case (true, false): return .success(.adHoc)
+        case (false, true): return .success(.certificate)
+        default: return .failure(.ownSigningModeMismatch(runningAdHoc: runningAdHoc))
+        }
     }
 
     /// With a certificate, the helper must carry `helperIdentifier` and be signed by the same leaf
@@ -84,7 +116,7 @@ enum PeerCodeVerifier {
     /// An ad-hoc app (Debug) has no certificate to compare with, so it trusts the designated
     /// requirement of the bundled helper as it is on disk now.
     static func trustedHelperRequirement(
-        signedLike app: SecStaticCode, helperIdentifier: String, bundledHelper: URL
+        signedLike app: OwnCode, helperIdentifier: String, bundledHelper: URL
     ) -> Result<TrustedPeer, PeerVerificationError> {
         trustedRequirement(signedLike: app, identifier: helperIdentifier, adHocFallback: bundledHelper)
     }
@@ -92,7 +124,7 @@ enum PeerCodeVerifier {
     /// The helper's side of `trustedHelperRequirement`: the app must carry `appIdentifier` and be
     /// signed by the helper's leaf, or, for an ad-hoc helper, match the containing app on disk now.
     static func trustedAppRequirement(
-        signedLike helper: SecStaticCode, appIdentifier: String, containingApp: URL
+        signedLike helper: OwnCode, appIdentifier: String, containingApp: URL
     ) -> Result<TrustedPeer, PeerVerificationError> {
         trustedRequirement(signedLike: helper, identifier: appIdentifier, adHocFallback: containingApp)
     }
@@ -116,18 +148,27 @@ enum PeerCodeVerifier {
     }
 
     private static func trustedRequirement(
-        signedLike ownCode: SecStaticCode, identifier: String, adHocFallback: URL
+        signedLike ownCode: OwnCode, identifier: String, adHocFallback: URL
     ) -> Result<TrustedPeer, PeerVerificationError> {
         var info: CFDictionary?
-        let status = SecCodeCopySigningInformation(ownCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info)
+        let status = SecCodeCopySigningInformation(ownCode.staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info)
         guard status == errSecSuccess else { return .failure(.ownSignatureUnavailable(status)) }
         guard let info = info as? [String: Any] else {
             return .failure(.securityCallReturnedNothing("SecCodeCopySigningInformation"))
         }
-        guard let certificates = info[kSecCodeInfoCertificates as String] as? [SecCertificate],
-              let leaf = certificates.first else {
-            return designatedRequirement(ofCodeAt: adHocFallback).map { TrustedPeer(requirement: $0, requiresHardenedRuntime: false) }
+        let leaf = (info[kSecCodeInfoCertificates as String] as? [SecCertificate])?.first
+        return trustBranch(liveStatus: ownCode.liveStatus, hasLeaf: leaf != nil).flatMap { branch in
+            switch branch {
+            case .adHoc:
+                return designatedRequirement(ofCodeAt: adHocFallback).map { TrustedPeer(requirement: $0, requiresHardenedRuntime: false) }
+            case .certificate:
+                guard let leaf else { return .failure(.ownSigningModeMismatch(runningAdHoc: false)) }
+                return certificateRequirement(identifier: identifier, leaf: leaf)
+            }
         }
+    }
+
+    private static func certificateRequirement(identifier: String, leaf: SecCertificate) -> Result<TrustedPeer, PeerVerificationError> {
         let leafHash = Insecure.SHA1.hash(data: SecCertificateCopyData(leaf) as Data)
             .map { String(format: "%02x", $0) }.joined()
         let text = "identifier \"\(identifier)\" and certificate leaf = H\"\(leafHash)\""
@@ -138,32 +179,41 @@ enum PeerCodeVerifier {
         return .success(TrustedPeer(requirement: requirement, requiresHardenedRuntime: true))
     }
 
-    static func verify(socket: Int32, against trusted: TrustedPeer) -> Result<Void, PeerVerificationError> {
+    static func verify(
+        socket: Int32,
+        against trusted: TrustedPeer,
+        statusReader: (SecCode) -> Result<UInt32, PeerVerificationError> = liveStatus(of:)
+    ) -> Result<Void, PeerVerificationError> {
         peerCode(of: socket).flatMap { code in
             let status = SecCodeCheckValidity(code, [], trusted.requirement)
             guard status == errSecSuccess else { return .failure(.requirementNotSatisfied(status)) }
             guard trusted.requiresHardenedRuntime else { return .success(()) }
-            return dynamicStatus(of: code).flatMap { hardenedRuntimeCheck(codeStatus: $0, required: true) }
+            return statusReader(code).flatMap { hardenedRuntimeCheck(codeStatus: $0, required: true) }
         }
     }
 
-    static let hardenedRuntimeFlag: UInt32 = 0x10000
-
-    static func hardenedRuntimeCheck(codeStatus: UInt32?, required: Bool) -> Result<Void, PeerVerificationError> {
+    static func hardenedRuntimeCheck(codeStatus: UInt32, required: Bool) -> Result<Void, PeerVerificationError> {
         guard required else { return .success(()) }
-        guard let codeStatus, codeStatus & hardenedRuntimeFlag != 0 else { return .failure(.peerWithoutHardenedRuntime) }
+        guard codeStatus & SecCodeSignatureFlags.runtime.rawValue != 0 else { return .failure(.peerWithoutHardenedRuntime) }
         return .success(())
     }
 
     // The running process's flags, not the file's: SecCode is a SecStaticCode subclass in the
     // Security framework, and kSecCSDynamicInformation makes the call read the live status.
-    private static func dynamicStatus(of code: SecCode) -> Result<UInt32?, PeerVerificationError> {
+    static func liveStatus(of code: SecCode) -> Result<UInt32, PeerVerificationError> {
         var info: CFDictionary?
         let status = SecCodeCopySigningInformation(
             unsafeBitCast(code, to: SecStaticCode.self), SecCSFlags(rawValue: kSecCSDynamicInformation), &info
         )
         guard status == errSecSuccess else { return .failure(.peerStatusUnavailable(status)) }
-        return .success(((info as? [String: Any])?[kSecCodeInfoStatus as String] as? NSNumber)?.uint32Value)
+        return codeStatus(from: info as? [String: Any] ?? [:])
+    }
+
+    static func codeStatus(from signingInformation: [String: Any]) -> Result<UInt32, PeerVerificationError> {
+        guard let status = signingInformation[kSecCodeInfoStatus as String] as? NSNumber else {
+            return .failure(.securityCallReturnedNothing("kSecCodeInfoStatus"))
+        }
+        return .success(status.uint32Value)
     }
 
     /// Only for logging: the decision uses the audit token, which a reused PID cannot fake.
