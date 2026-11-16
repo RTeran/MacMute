@@ -15,7 +15,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // at its own helper before it quits.
         muteStateManager.onSocketServerListening = { [weak self] in
             guard let self, !self.didInstallNativeMessagingHost else { return }
-            // A failed install is tried again on the next listening report.
+            // The server reports listening once per launch, so a failed install stays failed until
+            // the next launch; meanwhile the popover says MacMute can't accept connections from Chrome.
             self.didInstallNativeMessagingHost = self.installNativeMessagingHost()
             self.muteStateManager.nativeMessagingHostInstallFailed = !self.didInstallNativeMessagingHost
         }
@@ -66,11 +67,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
-        // Ensure the helper is executable
-        try? fileManager.setAttributes(
-            [.posixPermissions: 0o755],
-            ofItemAtPath: helperPath
-        )
+        do {
+            try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helperPath)
+        } catch {
+            logger.error("Failed to make MacMuteHelper executable: \(errorCode(error), privacy: .public)")
+            return false
+        }
 
         let extensionIds = findMacMuteExtensionIds()
         let origins = extensionIds.map { "chrome-extension://\($0)/" }
