@@ -76,13 +76,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
-        let manifest = NativeMessagingHost.manifest(helperPath: helperPath)
-        let manifestPath = chromeNMHDir.appendingPathComponent("\(NativeMessagingHost.name).json")
-
         do {
-            let data = try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys])
-            try data.write(to: manifestPath)
-            logger.notice("Installed the native messaging manifest at \(manifestPath.path) for the helper at \(helperPath)")
+            let manifestURL = try NativeMessagingHost.install(helperPath: helperPath, into: chromeNMHDir)
+            logger.notice("Installed the native messaging manifest at \(manifestURL.path) for the helper at \(helperPath)")
             return true
         } catch {
             logger.error("Failed to write the native messaging manifest: \(errorCode(error), privacy: .public)")
