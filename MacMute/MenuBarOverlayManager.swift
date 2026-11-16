@@ -10,6 +10,23 @@ class MenuBarOverlayManager {
     private var overlayWindows: [NSWindow] = []
     private var screenLayout: [ScreenKey] = []
     private var isHidden = true
+    private var screenObserver: NSObjectProtocol?
+
+    init() {
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.screensChanged()
+        }
+    }
+
+    deinit {
+        if let screenObserver {
+            NotificationCenter.default.removeObserver(screenObserver)
+        }
+    }
 
     func updateOverlay(
         micMuted: Bool,
@@ -39,6 +56,18 @@ class MenuBarOverlayManager {
             guard let self = self else { return }
             self.render(self.model.hideUnconfirmed())
         }
+    }
+
+    private func screensChanged() {
+        guard currentScreenLayout() != screenLayout else { return }
+        let render = model.screensChanged()
+        for window in overlayWindows {
+            window.orderOut(nil)
+        }
+        overlayWindows = []
+        screenLayout = []
+        isHidden = true
+        self.render(render)
     }
 
     private func render(_ render: OverlayModel.Render?) {
