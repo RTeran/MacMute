@@ -15,6 +15,12 @@ class MuteStateManager: ObservableObject {
 
     @Published var isMuted: Bool = false
     @Published var isCameraOff: Bool = false
+    @Published private(set) var isConnectedToChrome = false
+
+    /// Called on main when another MacMute already owns the socket.
+    var onAnotherInstanceRunning: (() -> Void)?
+    /// Called on main each time the socket server starts listening.
+    var onSocketServerListening: (() -> Void)?
 
     @Published var micMutedColor: Color = .red {
         didSet {
@@ -50,6 +56,9 @@ class MuteStateManager: ObservableObject {
             self?.overlayManager.showUnconfirmed(color: Self.unconfirmedColor)
             NotificationCenter.default.post(name: .unconfirmedToggleFeedbackDidStart, object: nil)
         }
+        coordinator.onChromeConnectionChange = { [weak self] connected in
+            self?.isConnectedToChrome = connected
+        }
         coordinator.onUnconfirmedFeedbackEnd = { [weak self] _ in
             self?.overlayManager.hideUnconfirmed()
             NotificationCenter.default.post(name: .unconfirmedToggleFeedbackDidEnd, object: nil)
@@ -71,6 +80,13 @@ class MuteStateManager: ObservableObject {
         }
         socketServer.onMessageReceived = { [weak self] helper, message in
             self?.coordinator.handle(message, from: helper)
+        }
+        socketServer.onStateChange = { [weak self] state in
+            switch state {
+            case .listening: self?.onSocketServerListening?()
+            case .anotherInstanceRunning: self?.onAnotherInstanceRunning?()
+            case .retrying, .failed: break
+            }
         }
         socketServer.start()
 

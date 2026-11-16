@@ -21,6 +21,8 @@ class StatusBarController {
         // Without this, macOS may flip the popover above the button (off-screen).
         let naturalSize = hostingController.sizeThatFits(in: CGSize(width: 280, height: CGFloat.greatestFiniteMagnitude))
         popover.contentSize = naturalSize
+        // Lets the popover follow the view when the Chrome connection line appears or disappears.
+        hostingController.sizingOptions = .preferredContentSize
         popover.behavior = .transient
         popover.contentViewController = hostingController
 

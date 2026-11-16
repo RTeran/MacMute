@@ -22,6 +22,12 @@ struct ShortcutConfigView: View {
                 label: muteStateManager.isCameraOff ? "Camera Off" : "Camera Active"
             )
 
+            if !muteStateManager.isConnectedToChrome {
+                Label("No connection with Chrome", systemImage: "exclamationmark.triangle.fill")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+
             Divider()
 
             // Mic shortcut

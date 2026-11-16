@@ -3,13 +3,38 @@ import Cocoa
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusBarController: StatusBarController!
     private var muteStateManager: MuteStateManager!
+    private var didInstallNativeMessagingHost = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSLog("MacMute: App launched")
         muteStateManager = MuteStateManager.shared
         statusBarController = StatusBarController(muteStateManager: muteStateManager)
+        // Written only once this instance owns the socket: a second instance must not point Chrome
+        // at its own helper before it quits.
+        muteStateManager.onSocketServerListening = { [weak self] in
+            guard let self, !self.didInstallNativeMessagingHost else { return }
+            self.didInstallNativeMessagingHost = true
+            self.installNativeMessagingHost()
+        }
+        muteStateManager.onAnotherInstanceRunning = { [weak self] in
+            self?.quitBecauseAnotherInstanceIsRunning()
+        }
         muteStateManager.start()
-        installNativeMessagingHost()
+    }
+
+    private func quitBecauseAnotherInstanceIsRunning() {
+        // An agent app is not active on its own, so the alert would open behind other windows.
+        if #available(macOS 14, *) {
+            NSApp.activate()
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        let alert = NSAlert()
+        alert.messageText = "MacMute is already running"
+        alert.informativeText = "Another copy of MacMute is open, so this one will quit."
+        alert.addButton(withTitle: "Quit")
+        alert.runModal()
+        NSApp.terminate(nil)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
