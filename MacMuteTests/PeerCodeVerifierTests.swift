@@ -47,16 +47,28 @@ final class PeerCodeVerifierTests: XCTestCase {
         }
     }
 
-    func testAnAppWithACertificateTrustsTheHelperIdentifierSignedByTheSameLeaf() throws {
-        let signedApp = try staticCode(at: URL(fileURLWithPath: "/bin/ls"))
+    // /bin/ls stands in for both the app and the helper: it carries a certificate chain and its own identifier.
+    func testAnAppWithACertificateTrustsCodeWithTheIdentifierSignedByTheSameLeaf() throws {
+        let signed = try staticCode(at: URL(fileURLWithPath: "/bin/ls"))
         let missingHelper = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("missing-\(UUID().uuidString)")
 
         let requirement = try PeerCodeVerifier.trustedHelperRequirement(
-            signedLike: signedApp, helperIdentifier: "com.macmute.helper", bundledHelper: missingHelper
+            signedLike: signed, helperIdentifier: "com.apple.ls", bundledHelper: missingHelper
         ).get()
 
         let text = try requirementText(requirement)
-        XCTAssertNotNil(text.range(of: #"^identifier "com\.macmute\.helper" and certificate leaf = H"[0-9a-f]{40}"$"#, options: .regularExpression), text)
+        XCTAssertEqual(SecStaticCodeCheckValidity(signed, [], requirement), errSecSuccess, text)
+    }
+
+    func testAnAppWithACertificateRejectsCodeWithAnotherIdentifier() throws {
+        let signed = try staticCode(at: URL(fileURLWithPath: "/bin/ls"))
+        let missingHelper = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("missing-\(UUID().uuidString)")
+
+        let requirement = try PeerCodeVerifier.trustedHelperRequirement(
+            signedLike: signed, helperIdentifier: "com.macmute.helper", bundledHelper: missingHelper
+        ).get()
+
+        XCTAssertEqual(SecStaticCodeCheckValidity(signed, [], requirement), errSecCSReqFailed)
     }
 
     func testReportsARequirementThatCannotBeBuilt() throws {
@@ -74,7 +86,7 @@ final class PeerCodeVerifierTests: XCTestCase {
     }
 
     func testAnAdHocAppTrustsTheDesignatedRequirementOfTheBundledHelper() throws {
-        let adHocApp = try staticCode(at: Bundle(for: Self.self).bundleURL)
+        let adHocApp = try adHocTestBundle()
 
         let requirement = try PeerCodeVerifier.trustedHelperRequirement(
             signedLike: adHocApp, helperIdentifier: "com.macmute.helper", bundledHelper: try ownCodeURL()
@@ -84,7 +96,7 @@ final class PeerCodeVerifierTests: XCTestCase {
     }
 
     func testAnAdHocAppWithoutTheBundledHelperHasNoRequirement() throws {
-        let adHocApp = try staticCode(at: Bundle(for: Self.self).bundleURL)
+        let adHocApp = try adHocTestBundle()
         let missingHelper = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("missing-\(UUID().uuidString)")
 
         let result = PeerCodeVerifier.trustedHelperRequirement(
@@ -101,7 +113,7 @@ final class PeerCodeVerifierTests: XCTestCase {
         let helper = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("helper-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: helper) }
         try FileManager.default.copyItem(at: try ownCodeURL(), to: helper)
-        let adHocApp = try staticCode(at: Bundle(for: Self.self).bundleURL)
+        let adHocApp = try adHocTestBundle()
         let requirement = try PeerCodeVerifier.trustedHelperRequirement(
             signedLike: adHocApp, helperIdentifier: "com.macmute.helper", bundledHelper: helper
         ).get()
@@ -138,6 +150,16 @@ final class PeerCodeVerifierTests: XCTestCase {
         var code: SecStaticCode?
         XCTAssertEqual(SecStaticCodeCreateWithPath(url as CFURL, [], &code), errSecSuccess)
         return try XCTUnwrap(code)
+    }
+
+    private func adHocTestBundle() throws -> SecStaticCode {
+        let code = try staticCode(at: Bundle(for: Self.self).bundleURL)
+        var info: CFDictionary?
+        XCTAssertEqual(SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info), errSecSuccess)
+        if let certificates = (info as? [String: Any])?[kSecCodeInfoCertificates as String] as? [Any], !certificates.isEmpty {
+            throw XCTSkip("The test bundle is signed with a certificate; these tests need an ad-hoc one")
+        }
+        return code
     }
 
     private func requirementText(_ requirement: SecRequirement) throws -> String {

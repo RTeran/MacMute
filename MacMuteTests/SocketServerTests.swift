@@ -293,7 +293,7 @@ final class SocketServerTests: XCTestCase {
         XCTAssertEqual(mode?.intValue, 0o755)
     }
 
-    func testRefusesASocketDirectoryThatIsNotADirectory() throws {
+    func testFailsToCreateTheSocketDirectoryOverAFile() throws {
         let file = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("mm-file-\(UUID().uuidString)")
         XCTAssertTrue(FileManager.default.createFile(atPath: file.path, contents: Data()))
         defer { try? FileManager.default.removeItem(at: file) }
@@ -398,6 +398,11 @@ final class SocketServerTests: XCTestCase {
 
     // The running process stands in for the helper, so a socketpair peer satisfies its requirement.
     private func appBundle(withHelper: Bool) throws -> URL {
+        var info: CFDictionary?
+        XCTAssertEqual(SecCodeCopySigningInformation(try adHocCode().get(), SecCSFlags(rawValue: kSecCSSigningInformation), &info), errSecSuccess)
+        if let certificates = (info as? [String: Any])?[kSecCodeInfoCertificates as String] as? [Any], !certificates.isEmpty {
+            throw XCTSkip("The test bundle is signed with a certificate; these tests need an ad-hoc one")
+        }
         let app = socketDirectory.appendingPathComponent("Fake.app")
         let resources = app.appendingPathComponent("Contents/Resources")
         try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
@@ -524,6 +529,15 @@ final class PeerRejectionLogTests: XCTestCase {
         XCTAssertEqual(first.level, .error)
         XCTAssertEqual(second.level, .debug)
         XCTAssertEqual(other.level, .error)
+    }
+
+    func testForgetsTheReportedProcessesOnceItRemembersTooMany() {
+        var log = PeerRejectionLog()
+        for pid in pid_t(1)...257 {
+            _ = log.entry(for: .peerCodeUnavailable(-1), pid: pid)
+        }
+
+        XCTAssertEqual(log.entry(for: .peerCodeUnavailable(-1), pid: 1).level, .error)
     }
 
     func testReportsEveryRejectionOfAnUnknownProcessAsAnError() {
