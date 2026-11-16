@@ -1,16 +1,15 @@
 import Cocoa
 
 class MenuBarOverlayManager {
-    private struct ConfirmedState {
-        var micMuted = false
-        var cameraOff = false
-        var micColor = NSColor.red.withAlphaComponent(0.7)
-        var cameraColor = NSColor.systemBlue.withAlphaComponent(0.7)
+    private struct ScreenKey: Equatable {
+        let displayID: CGDirectDisplayID?
+        let frame: NSRect
     }
 
+    private var model = OverlayModel()
     private var overlayWindows: [NSWindow] = []
-    private var confirmedState = ConfirmedState()
-    private var isShowingUnconfirmed = false
+    private var screenLayout: [ScreenKey] = []
+    private var isHidden = true
 
     func updateOverlay(
         micMuted: Bool,
@@ -20,107 +19,125 @@ class MenuBarOverlayManager {
     ) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            self.confirmedState = ConfirmedState(
+            let state = OverlayModel.ConfirmedState(
                 micMuted: micMuted, cameraOff: cameraOff,
                 micColor: micColor, cameraColor: cameraColor
             )
-            // The unconfirmed border stays until hideUnconfirmed() restores the latest confirmed state.
-            guard !self.isShowingUnconfirmed else { return }
-            self.renderConfirmedState()
+            self.render(self.model.updateConfirmed(state))
         }
     }
 
     func showUnconfirmed(color: NSColor) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            self.isShowingUnconfirmed = true
-            self.showOverlays(style: .unconfirmed(color: color))
+            self.render(self.model.showUnconfirmed(color: color))
         }
     }
 
     func hideUnconfirmed() {
         DispatchQueue.main.async { [weak self] in
-            guard let self = self, self.isShowingUnconfirmed else { return }
-            self.isShowingUnconfirmed = false
-            self.renderConfirmedState()
+            guard let self = self else { return }
+            self.render(self.model.hideUnconfirmed())
         }
     }
 
-    private func renderConfirmedState() {
-        let state = confirmedState
-        if state.micMuted || state.cameraOff {
-            showOverlays(style: .state(
-                micMuted: state.micMuted, cameraOff: state.cameraOff,
-                micColor: state.micColor, cameraColor: state.cameraColor
-            ))
-        } else {
-            hideOverlays()
+    private func render(_ render: OverlayModel.Render?) {
+        switch render {
+        case let .show(style): showOverlays(style: style)
+        case .hide: hideOverlays()
+        case nil: break
         }
     }
 
     private func showOverlays(style: BorderStyle) {
-        let windows = overlayWindows
-        overlayWindows = []
-        for window in windows {
-            window.orderOut(nil)
+        if overlayWindows.isEmpty || currentScreenLayout() != screenLayout {
+            rebuildWindows()
         }
 
-        for screen in NSScreen.screens {
-            let overlayFrame = screen.frame
-            let builtIn = isBuiltInDisplay(screen)
+        for window in overlayWindows {
+            guard let borderView = window.contentView as? ScreenBorderView else { continue }
+            borderView.configure(style: style)
+            if case .unconfirmed = style {
+                borderView.startPulsing()
+            } else {
+                borderView.stopPulsing()
+            }
+        }
 
-            let window = NSWindow(
-                contentRect: overlayFrame,
-                styleMask: [.borderless],
-                backing: .buffered,
-                defer: false
-            )
-
-            window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.statusWindow)) - 1)
-            window.isOpaque = false
-            window.ignoresMouseEvents = true
-            window.collectionBehavior = [.canJoinAllSpaces, .stationary]
-            window.hasShadow = false
-            window.sharingType = .none
-            window.alphaValue = 0
-            window.backgroundColor = .clear
-
-            let borderView = ScreenBorderView(frame: NSRect(origin: .zero, size: overlayFrame.size))
-            borderView.configure(style: style, roundTopCorners: builtIn)
-            window.contentView = borderView
+        guard isHidden else { return }
+        isHidden = false
+        for window in overlayWindows {
             window.orderFrontRegardless()
-
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.2
                 window.animator().alphaValue = 1.0
             }
-            if case .unconfirmed = style {
-                borderView.startPulsing()
-            }
-
-            overlayWindows.append(window)
         }
     }
 
     private func hideOverlays() {
-        let windows = overlayWindows
-        overlayWindows = []
+        guard !isHidden else { return }
+        isHidden = true
 
-        for window in windows {
+        for window in overlayWindows {
             NSAnimationContext.runAnimationGroup({ context in
                 context.duration = 0.2
                 window.animator().alphaValue = 0
-            }, completionHandler: {
+            }, completionHandler: { [weak self] in
+                // A show may have started while this fade-out was running.
+                guard self?.isHidden ?? true else { return }
                 window.orderOut(nil)
             })
         }
     }
 
-    private func isBuiltInDisplay(_ screen: NSScreen) -> Bool {
-        guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
-            return false
+    private func rebuildWindows() {
+        for window in overlayWindows {
+            window.orderOut(nil)
         }
-        return CGDisplayIsBuiltin(CGDirectDisplayID(number.uint32Value)) != 0
+        isHidden = true
+        screenLayout = currentScreenLayout()
+        overlayWindows = NSScreen.screens.map(makeWindow)
+    }
+
+    private func makeWindow(for screen: NSScreen) -> NSWindow {
+        let overlayFrame = screen.frame
+        let window = NSWindow(
+            contentRect: overlayFrame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+
+        window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.statusWindow)) - 1)
+        window.isOpaque = false
+        window.ignoresMouseEvents = true
+        window.collectionBehavior = [.canJoinAllSpaces, .stationary]
+        window.hasShadow = false
+        window.sharingType = .none
+        window.alphaValue = 0
+        window.backgroundColor = .clear
+
+        let borderView = ScreenBorderView(frame: NSRect(origin: .zero, size: overlayFrame.size))
+        borderView.setRoundTopCorners(isBuiltInDisplay(screen))
+        window.contentView = borderView
+        return window
+    }
+
+    private func currentScreenLayout() -> [ScreenKey] {
+        NSScreen.screens.map { ScreenKey(displayID: displayID(of: $0), frame: $0.frame) }
+    }
+
+    private func displayID(of screen: NSScreen) -> CGDirectDisplayID? {
+        guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+            return nil
+        }
+        return CGDirectDisplayID(number.uint32Value)
+    }
+
+    private func isBuiltInDisplay(_ screen: NSScreen) -> Bool {
+        guard let id = displayID(of: screen) else { return false }
+        return CGDisplayIsBuiltin(id) != 0
     }
 }
 
@@ -145,9 +162,13 @@ private class ScreenBorderView: NSView {
         layer?.backgroundColor = NSColor.clear.cgColor
     }
 
-    func configure(style: BorderStyle, roundTopCorners: Bool) {
+    func configure(style: BorderStyle) {
+        guard style != self.style else { return }
         self.style = style
+        needsDisplay = true
+    }
 
+    func setRoundTopCorners(_ roundTopCorners: Bool) {
         if roundTopCorners {
             // layerMinXMaxYCorner = top-left, layerMaxXMaxYCorner = top-right
             // (NSView no-flipped: max Y = top of view)
@@ -158,8 +179,6 @@ private class ScreenBorderView: NSView {
             layer?.cornerRadius = 0
             layer?.masksToBounds = false
         }
-
-        needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -192,8 +211,15 @@ private class ScreenBorderView: NSView {
     }
 
     func startPulsing() {
-        layer?.add(UnconfirmedFeedback.blinkAnimation(), forKey: "unconfirmedPulse")
+        guard layer?.animation(forKey: Self.pulseKey) == nil else { return }
+        layer?.add(UnconfirmedFeedback.blinkAnimation(), forKey: Self.pulseKey)
     }
+
+    func stopPulsing() {
+        layer?.removeAnimation(forKey: Self.pulseKey)
+    }
+
+    private static let pulseKey = "unconfirmedPulse"
 
     private func drawFullBorder(_ color: NSColor, depth d: CGFloat) {
         let w = bounds.width
