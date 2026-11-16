@@ -55,9 +55,12 @@ final class MuteStateCoordinator {
             self.onUnconfirmedFeedbackEnd?(self.displayed)
         }
         toggleConfirmation.onConfirmed = { [unowned self] target, newState in
-            guard let recipient = self.router.toggleRecipient(for: target) else { return }
+            guard let recipient = self.router.toggleRecipient(for: target) else {
+                self.logger.fault("Confirmed a \(target.rawValue, privacy: .public) toggle that has no recipient")
+                assertionFailure("Confirmed a toggle that has no recipient")
+                return
+            }
             self.router.recordConfirmedToggle(target, newState, from: recipient)
-            self.refreshDisplay()
         }
     }
 
@@ -116,16 +119,16 @@ final class MuteStateCoordinator {
 
     private func handleToggleResult(_ message: [String: Any], from helper: ClientID) {
         guard let result = ToggleResult(message: message) else { return logMalformed(message, from: helper) }
+        if case let .confirmed(newState) = result.outcome {
+            router.recordState(result.target, newState, from: helper)
+            refreshDisplay()
+        }
         guard router.isToggleRecipient(helper, for: result.target) else {
-            logger.notice("Ignoring \(result.target.rawValue, privacy: .public) toggle_result from helper \(helper, privacy: .public), the toggle was not sent to it")
+            logger.notice("\(result.target.rawValue, privacy: .public) toggle_result from helper \(helper, privacy: .public) does not confirm the toggle, it was not sent to it")
             return
         }
         if result.outcome == .failed(reason: "missing_state") {
             logger.error("toggle_result ok without state: \(String(describing: message), privacy: .public)")
-        }
-        if case let .confirmed(newState) = result.outcome {
-            router.recordState(result.target, newState, from: helper)
-            refreshDisplay()
         }
         toggleConfirmation.handle(result)
     }
