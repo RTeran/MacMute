@@ -45,9 +45,19 @@ class SocketServer {
     convenience init() {
         let appSupport = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/MacMute")
-        let bundledHelper = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/MacMuteHelper")
-        self.init(socketPath: appSupport.appendingPathComponent("macmute.sock").path) {
-            PeerCodeVerifier.ownStaticCode()
+        self.init(
+            socketPath: appSupport.appendingPathComponent("macmute.sock").path,
+            makeVerifyPeer: Self.trustedHelperCheck(appBundle: Bundle.main.bundleURL, ownCode: PeerCodeVerifier.ownStaticCode)
+        )
+    }
+
+    static func trustedHelperCheck(
+        appBundle: URL,
+        ownCode: @escaping () -> Result<SecStaticCode, PeerVerificationError>
+    ) -> MakeVerifyPeer {
+        let bundledHelper = appBundle.appendingPathComponent("Contents/Resources/MacMuteHelper")
+        return {
+            ownCode()
                 .flatMap {
                     PeerCodeVerifier.trustedHelperRequirement(
                         signedLike: $0, helperIdentifier: "com.macmute.helper", bundledHelper: bundledHelper

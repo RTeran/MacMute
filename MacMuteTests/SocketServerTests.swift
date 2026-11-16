@@ -1,3 +1,4 @@
+import Security
 import XCTest
 
 final class SocketServerTests: XCTestCase {
@@ -150,12 +151,63 @@ final class SocketServerTests: XCTestCase {
         }
 
         let rejected = rawConnect()
+        writeLine(#"{"type":"state_update","muted":true}"#, to: rejected)
         XCTAssertTrue(waitForEndOfStream(on: rejected))
         let (helper, id) = connectHelper()
 
         XCTAssertEqual(connectedIDs, [id])
+        XCTAssertTrue(received.isEmpty)
         XCTAssertEqual(send(["type": "ping"], to: id), "sent")
         XCTAssertEqual(readLine(from: helper), #"{"type":"ping"}"#)
+    }
+
+    func testTheProductionCheckTrustsTheHelperBundledInTheAppResources() throws {
+        let app = try appBundle(withHelper: true)
+
+        let verifyPeer = try SocketServer.trustedHelperCheck(appBundle: app, ownCode: adHocCode)().get()
+
+        var pair: [Int32] = [-1, -1]
+        XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &pair), 0)
+        defer { pair.forEach { close($0) } }
+        XCTAssertNoThrow(try verifyPeer(pair[0]).get())
+    }
+
+    func testTheProductionCheckRejectsAPeerThatIsNotTheBundledHelper() throws {
+        let app = try appBundle(withHelper: false)
+        try FileManager.default.copyItem(
+            at: URL(fileURLWithPath: "/bin/ls"),
+            to: app.appendingPathComponent("Contents/Resources/MacMuteHelper")
+        )
+
+        let verifyPeer = try SocketServer.trustedHelperCheck(appBundle: app, ownCode: adHocCode)().get()
+
+        var pair: [Int32] = [-1, -1]
+        XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &pair), 0)
+        defer { pair.forEach { close($0) } }
+        guard case .failure(.requirementNotSatisfied) = verifyPeer(pair[0]) else {
+            return XCTFail("Expected requirementNotSatisfied")
+        }
+    }
+
+    func testTheProductionCheckCannotBeBuiltWithoutTheBundledHelper() throws {
+        let app = try appBundle(withHelper: false)
+
+        let result = SocketServer.trustedHelperCheck(appBundle: app, ownCode: adHocCode)()
+
+        guard case let .failure(.expectedCodeUnavailable(path, _)) = result else {
+            return XCTFail("Expected expectedCodeUnavailable, got \(result)")
+        }
+        XCTAssertEqual(path, app.appendingPathComponent("Contents/Resources/MacMuteHelper").path)
+    }
+
+    func testTheProductionCheckFailsWhenTheAppSignatureIsUnavailable() throws {
+        let app = try appBundle(withHelper: true)
+
+        let result = SocketServer.trustedHelperCheck(appBundle: app) { .failure(.ownSignatureUnavailable(errSecCSUnsigned)) }()
+
+        guard case .failure(.ownSignatureUnavailable(errSecCSUnsigned)) = result else {
+            return XCTFail("Expected ownSignatureUnavailable, got \(result)")
+        }
     }
 
     func testOnlyTheOwnerCanUseTheSocket() throws {
@@ -297,6 +349,28 @@ final class SocketServerTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    private func adHocCode() -> Result<SecStaticCode, PeerVerificationError> {
+        var code: SecStaticCode?
+        let status = SecStaticCodeCreateWithPath(Bundle(for: Self.self).bundleURL as CFURL, [], &code)
+        return code.map { .success($0) } ?? .failure(.ownSignatureUnavailable(status))
+    }
+
+    // The running process stands in for the helper, so a socketpair peer satisfies its requirement.
+    private func appBundle(withHelper: Bool) throws -> URL {
+        let app = socketDirectory.appendingPathComponent("Fake.app")
+        let resources = app.appendingPathComponent("Contents/Resources")
+        try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+        guard withHelper else { return app }
+        var selfCode: SecCode?
+        XCTAssertEqual(SecCodeCopySelf([], &selfCode), errSecSuccess)
+        var selfStatic: SecStaticCode?
+        XCTAssertEqual(SecCodeCopyStaticCode(try XCTUnwrap(selfCode), [], &selfStatic), errSecSuccess)
+        var path: CFURL?
+        XCTAssertEqual(SecCodeCopyPath(try XCTUnwrap(selfStatic), [], &path), errSecSuccess)
+        try FileManager.default.copyItem(at: try XCTUnwrap(path) as URL, to: resources.appendingPathComponent("MacMuteHelper"))
+        return app
+    }
 
     private func connectHelper(file: StaticString = #filePath, line: UInt = #line) -> (Int32, ClientID) {
         let connected = expectation(description: "helper connected")
