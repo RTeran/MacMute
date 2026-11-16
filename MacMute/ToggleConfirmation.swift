@@ -134,7 +134,8 @@ extension DispatchWorkItem: ToggleTimer {}
 
 /// Decides when a toggle counts as confirmed and when to show the unconfirmed (amber) feedback.
 /// Every press stays outstanding until its own result arrives or its timeout expires, so a press
-/// that a newer one chained over or replaced can still report its failure.
+/// that a newer one chained over or replaced can still report its failure. A press that ends
+/// without its own success always shows the warning.
 /// Runs on a single queue (main in the app); timers, sending and request ids are injected for tests.
 final class ToggleConfirmation {
     typealias Send = (
@@ -259,13 +260,14 @@ final class ToggleConfirmation {
         }
     }
 
-    /// Fails the toggle waiting for `target`, if any, without waiting for its timeout.
-    /// Returns whether there was one.
+    /// Fails every outstanding press sent to `helper`. Returns the targets of the presses it failed.
     @discardableResult
-    func failPending(_ target: ToggleTarget, reason: String) -> Bool {
-        guard let toggle = pendingToggles.pending[target] else { return false }
-        fail(target, requestId: toggle.requestId, reason: reason)
-        return true
+    func failPresses(sentTo helper: ClientID, reason: String) -> [ToggleTarget] {
+        let presses = outstanding.values.filter { $0.recipient == helper }.sorted { $0.sequence < $1.sequence }
+        for press in presses {
+            fail(press.target, requestId: press.requestId, reason: reason)
+        }
+        return presses.map(\.target)
     }
 
     // A passive update that reaches the state the pending press expects is as good as a toggle_result.
@@ -311,12 +313,7 @@ final class ToggleConfirmation {
 
     private func expire(_ requestId: String) {
         guard let press = outstanding[requestId] else { return }
-        if pendingToggles.pending[press.target]?.requestId == requestId {
-            fail(press.target, requestId: requestId, reason: "timeout")
-        } else {
-            finish(requestId)
-            logger.error("\(press.target.rawValue, privacy: .public) request \(preview(requestId), privacy: .public) got no result before its timeout; a newer press had replaced it")
-        }
+        fail(press.target, requestId: requestId, reason: "timeout")
     }
 
     private func dropOldestIfOverLimit() {

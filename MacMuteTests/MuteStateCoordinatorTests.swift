@@ -411,6 +411,21 @@ final class MuteStateCoordinatorTests: XCTestCase {
         XCTAssertFalse(events.contains("amber mic"))
     }
 
+    func testWithoutBaselineDisconnectingTheHelperOfAReplacedPressShowsTheWarning() {
+        coordinator.helperConnected(1)
+        coordinator.handle(["type": "call_status", "inCall": true], from: 1)
+        coordinator.toggle(.mic)
+        connectWithMic(2, muted: false)
+        coordinator.handle(["type": "call_status", "inCall": true], from: 2)
+        coordinator.toggle(.mic)
+
+        coordinator.helperDisconnected(1)
+        coordinator.handle(toggleResult(.mic, "r2", ok: true, newState: true), from: 2)
+
+        XCTAssertTrue(events.contains("amber mic"))
+        XCTAssertFalse(events.contains { $0.hasPrefix("amber end") })
+    }
+
     func testDisconnectingAHelperThatDidNotReceiveTheToggleKeepsItPending() {
         connectWithMic(1, muted: false)
         connectWithMic(2, muted: false)

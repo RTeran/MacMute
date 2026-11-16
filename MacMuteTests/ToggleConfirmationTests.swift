@@ -222,14 +222,26 @@ final class ToggleConfirmationTests: XCTestCase {
         XCTAssertEqual(harness.confirmations.map(\.target), [.mic])
     }
 
-    func testAPressThatIsNoLongerPendingExpiresSilentlyAtItsTimeout() {
+    func testWithoutBaselineAPressThatIsNoLongerPendingShowsFeedbackAtItsTimeout() {
+        harness.confirmedMuted = nil
         harness.confirmation.toggle(.mic)
         harness.confirmation.toggle(.mic)
 
         harness.confirmationTimer(0).fire()
+        harness.confirm(.mic, "r2", newState: true)
+
+        XCTAssertEqual(harness.feedbackStarts, [.mic])
+        XCTAssertEqual(harness.feedbackEnds, 0)
+    }
+
+    func testAnExpiredPressIsNoLongerOutstanding() {
+        harness.confirmation.toggle(.mic)
+        harness.confirmation.toggle(.mic)
+        harness.confirmationTimer(0).fire()
+
         harness.fail(.mic, "r1", reason: "button_not_found")
 
-        XCTAssertTrue(harness.feedbackStarts.isEmpty)
+        XCTAssertEqual(harness.feedbackStarts, [.mic])
         XCTAssertEqual(harness.confirmation.pendingToggles.pending[.mic]?.requestId, "r2")
         XCTAssertFalse(harness.confirmationTimer(1).isCancelled)
     }
@@ -320,23 +332,25 @@ final class ToggleConfirmationTests: XCTestCase {
         XCTAssertTrue(harness.confirmationTimer().isCancelled)
     }
 
-    func testFailingThePendingToggleShowsFeedbackAtOnce() {
+    func testFailingTheHelpersPressesShowsFeedbackAtOnce() {
         harness.confirmation.toggle(.mic)
+        harness.confirmation.setRecipient(1, for: "r1")
 
-        let failed = harness.confirmation.failPending(.mic, reason: "helper_disconnected")
+        let failed = harness.confirmation.failPresses(sentTo: 1, reason: "helper_disconnected")
 
-        XCTAssertTrue(failed)
+        XCTAssertEqual(failed, [.mic])
         XCTAssertEqual(harness.feedbackStarts, [.mic])
         XCTAssertTrue(harness.confirmationTimer().isCancelled)
         XCTAssertNil(harness.confirmation.pendingToggles.pending[.mic])
     }
 
-    func testFailingWithoutAPendingToggleDoesNothing() {
+    func testFailingTheHelpersPressesLeavesOtherHelpersPressesRunning() {
         harness.confirmation.toggle(.camera)
+        harness.confirmation.setRecipient(2, for: "r1")
 
-        let failed = harness.confirmation.failPending(.mic, reason: "helper_disconnected")
+        let failed = harness.confirmation.failPresses(sentTo: 1, reason: "helper_disconnected")
 
-        XCTAssertFalse(failed)
+        XCTAssertEqual(failed, [])
         XCTAssertEqual(harness.feedbackStarts, [])
         XCTAssertNotNil(harness.confirmation.pendingToggles.pending[.camera])
     }

@@ -85,10 +85,10 @@ final class MuteStateCoordinator {
     }
 
     func helperDisconnected(_ helper: ClientID) {
-        let recipientTargets = router.disconnect(helper)
+        router.disconnect(helper)
         refreshDisplay()
-        for target in recipientTargets where toggleConfirmation.failPending(target, reason: "helper_disconnected") {
-            logger.error("Helper \(helper, privacy: .public) disconnected with a \(target.rawValue, privacy: .public) toggle pending")
+        for target in toggleConfirmation.failPresses(sentTo: helper, reason: "helper_disconnected") {
+            logger.error("Helper \(helper, privacy: .public) disconnected with a \(target.rawValue, privacy: .public) press outstanding")
         }
     }
 
