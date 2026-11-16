@@ -286,10 +286,13 @@
     return toggleControl("camera", findCameraButton, getCameraState, timeoutMs);
   }
 
+  let tornDown = false;
+
   function safeSend(message) {
+    if (tornDown) return;
     const warnNotSent = (error) => console.warn(`MacMute: could not send ${message.type}`, error?.message);
     try {
-      chrome.runtime.sendMessage(message)?.catch?.(warnNotSent);
+      chrome.runtime.sendMessage(message).catch(warnNotSent);
     } catch (error) {
       // A synchronous throw means this instance's extension context is gone for good.
       warnNotSent(error);
@@ -484,7 +487,7 @@
       callControlsSeen = true;
       callLeftAwaitingVisible = false;
       cancelCallLeft();
-    } else if (callControlsSeen && callLeftTimer === null) {
+    } else if (callControlsSeen && callLeftTimer === null && !callLeftAwaitingVisible) {
       startCallLeftWait();
     }
   }
@@ -497,6 +500,7 @@
     }
     if (hasCallControls()) return;
     if (document.visibilityState === "hidden") {
+      console.debug("MacMute: call controls gone from a hidden tab, waiting for it to be shown");
       callLeftAwaitingVisible = true;
       return;
     }
@@ -511,6 +515,13 @@
     callControlsSeen = false;
     safeSend({ type: "call_left" });
     forgetCallState();
+    endTogglesInProgress("call_left");
+  }
+
+  function endTogglesInProgress(reason) {
+    for (const finish of [...togglesInProgress.values()]) {
+      finish({ ok: false, reason, before: null, after: null });
+    }
   }
 
   // A state kept from the previous call would hide the first report of the next one.
@@ -564,14 +575,13 @@
   }
 
   function teardown() {
+    tornDown = true;
     observer.disconnect();
     cancelStateReport();
     cancelCallLeft();
     stopLateWait("mic");
     stopLateWait("camera");
-    for (const finish of [...togglesInProgress.values()]) {
-      finish({ ok: false, reason: "torn_down", before: null, after: null });
-    }
+    endTogglesInProgress("torn_down");
     window.removeEventListener("message", handleMediaSessionMessage);
     document.removeEventListener("visibilitychange", handleVisibilityChange);
     document.removeEventListener("DOMContentLoaded", startObserving);

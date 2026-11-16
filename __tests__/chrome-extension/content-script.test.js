@@ -7,7 +7,7 @@ beforeAll(() => {
   global.chrome = {
     runtime: {
       id: "macmute-test",
-      sendMessage: jest.fn(),
+      sendMessage: jest.fn(() => Promise.resolve()),
       onMessage: {
         addListener: jest.fn(),
         removeListener: jest.fn(),
@@ -1030,17 +1030,21 @@ describe("re-injection guard (window.__macMuteLoaded)", () => {
       jest.useFakeTimers();
       const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
       window.__macMuteLoaded = orphan();
-      document.body.innerHTML = '<button data-is-muted="false"></button>';
+      document.body.innerHTML =
+        '<button data-is-muted="false"></button><button aria-label="Turn off camera"></button>';
       const { instance } = loadFreshInstance();
       const messageHandler = chrome.runtime.onMessage.addListener.mock.calls[0][0];
+      chrome.runtime.sendMessage.mockClear();
       chrome.runtime.sendMessage.mockImplementationOnce(() => {
         throw new Error("Extension context invalidated.");
       });
 
       document.querySelector("[data-is-muted]").setAttribute("data-is-muted", "true");
+      document.querySelector('[aria-label="Turn off camera"]').setAttribute("aria-label", "Turn on camera");
       await Promise.resolve();
       jest.advanceTimersByTime(instance.STATE_REPORT_DELAY_MS);
 
+      expect(chrome.runtime.sendMessage).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("state_update"), "Extension context invalidated.");
       expect(chrome.runtime.onMessage.removeListener).toHaveBeenCalledWith(messageHandler);
       warn.mockRestore();
@@ -1898,7 +1902,7 @@ describe("call presence", () => {
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
     document.body.innerHTML = MIC_ON + CAMERA_ON;
     script.startObserving();
-    script.toggleCamera(script.CALL_LEFT_GRACE_MS * 100);
+    const pending = script.toggleCamera(script.CALL_LEFT_GRACE_MS * 100);
 
     await replacePage("<div>Loading</div>");
     jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS * script.CALL_LEFT_MAX_TOGGLE_WAITS);
@@ -1907,7 +1911,23 @@ describe("call presence", () => {
     jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS);
     expect(callLeftMessages()).toEqual([{ type: "call_left" }]);
     expect(warn).toHaveBeenCalled();
+    expect(await pending).toEqual(expect.objectContaining({ ok: false, reason: "call_left" }));
     warn.mockRestore();
+  });
+
+  test("does not search the hidden page again while it waits to be shown", async () => {
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+    setVisibility("hidden");
+    await leaveCall();
+    const querySelector = jest.spyOn(document, "querySelector");
+
+    await replacePage("<div>Another hidden render</div>");
+    jest.advanceTimersByTime(script.CALL_LEFT_GRACE_MS);
+
+    const selectorCount = script.MUTE_BUTTON_SELECTORS.length + script.CAMERA_BUTTON_SELECTORS.length;
+    expect(querySelector).toHaveBeenCalledTimes(selectorCount);
+    querySelector.mockRestore();
   });
 
   test("logs a call_left that the extension rejects", async () => {
