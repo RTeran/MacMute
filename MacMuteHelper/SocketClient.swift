@@ -47,6 +47,7 @@ final class SocketClient {
     private let maxConnectionsWithoutData: Int
     private let makeVerifyApp: MakeVerifyApp
     private var connectionsWithoutData = 0
+    private var receivedDataOnConnection = false
     private let queue = DispatchQueue(label: "com.macmute.helper.socket")
     private var backoff: RetryBackoff
     private var socketFD: Int32 = -1
@@ -97,6 +98,21 @@ final class SocketClient {
 
     private var socketName: String { (socketPath as NSString).lastPathComponent }
 
+    enum ConnectionEnd: Equatable {
+        case closedByApp
+        case failed
+    }
+
+    // A reset or any other error can come from an app that crashed while restarting, so only a
+    // clean close can be the app turning this helper away.
+    static func connectionEnd(afterReadReturning result: Int, errno code: Int32) -> ConnectionEnd {
+        result == 0 ? .closedByApp : .failed
+    }
+
+    static func connectionEnd(afterWriteFailingWith code: Int32?) -> ConnectionEnd {
+        code == EPIPE ? .closedByApp : .failed
+    }
+
     func start() {
         queue.async { [weak self] in
             guard let self, !self.isRunning else { return }
@@ -140,7 +156,11 @@ final class SocketClient {
             // A partial line would glue itself to the next message, so the connection is unusable.
             if written != messageData.count, let source = self.readSource {
                 let cause = writeErrno.map { String(cString: strerror($0)) } ?? "no buffer"
-                self.disconnect(fd, source: source, reason: "write failed after \(written)/\(messageData.count) bytes: \(cause)", countsAsRejection: false)
+                self.disconnect(
+                    fd, source: source,
+                    reason: "write failed after \(written)/\(messageData.count) bytes (\(cause)), dropping \(preview(message))",
+                    level: .error, end: Self.connectionEnd(afterWriteFailingWith: writeErrno)
+                )
             }
         }
     }
@@ -202,6 +222,7 @@ final class SocketClient {
 
         HelperLog.logger.notice("Connected to MacMute app")
         socketFD = fd
+        receivedDataOnConnection = false
         backoff.reset()
         startReading(fd)
         onStateChange?(.connected)
@@ -222,7 +243,6 @@ final class SocketClient {
     private func startReading(_ fd: Int32) {
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         var framer = LineFramer(maxLineLength: maxLineLength)
-        var receivedData = false
 
         source.setEventHandler { [weak self, unowned source] in
             guard let self else { return }
@@ -232,11 +252,15 @@ final class SocketClient {
             if bytesRead < 0, errno == EAGAIN { return }
 
             guard bytesRead > 0 else {
-                let cause = bytesRead < 0 ? String(cString: strerror(errno)) : "end of stream"
-                return self.disconnect(fd, source: source, reason: cause, countsAsRejection: !receivedData)
+                let code = errno
+                let cause = bytesRead < 0 ? String(cString: strerror(code)) : "end of stream"
+                return self.disconnect(
+                    fd, source: source, reason: cause, level: bytesRead == 0 ? .default : .error,
+                    end: Self.connectionEnd(afterReadReturning: bytesRead, errno: code)
+                )
             }
-            if !receivedData {
-                receivedData = true
+            if !self.receivedDataOnConnection {
+                self.receivedDataOnConnection = true
                 self.connectionsWithoutData = 0
             }
 
@@ -244,7 +268,7 @@ final class SocketClient {
             do {
                 lines = try framer.append(Data(readBuffer[0..<bytesRead]))
             } catch {
-                return self.disconnect(fd, source: source, reason: "line over the \(self.maxLineLength) byte limit", countsAsRejection: false)
+                return self.disconnect(fd, source: source, reason: "line over the \(self.maxLineLength) byte limit", level: .error, end: .failed)
             }
             for line in lines {
                 let object: Any
@@ -272,14 +296,14 @@ final class SocketClient {
 
     // The app sends get_state to every helper it accepts, so a connection it closes before
     // sending anything means it rejected this helper; retrying forever would only fill both logs.
-    private func disconnect(_ fd: Int32, source: DispatchSourceRead, reason: String, countsAsRejection: Bool) {
-        HelperLog.logger.notice("Disconnected from app (\(reason, privacy: .public))")
+    private func disconnect(_ fd: Int32, source: DispatchSourceRead, reason: String, level: OSLogType, end: ConnectionEnd) {
+        HelperLog.logger.log(level: level, "Disconnected from app (\(reason, privacy: .public))")
         source.cancel()
         guard socketFD == fd else { return }
         socketFD = -1
         readSource = nil
         guard isRunning else { return }
-        if countsAsRejection {
+        if end == .closedByApp, !receivedDataOnConnection {
             connectionsWithoutData += 1
             if connectionsWithoutData >= maxConnectionsWithoutData {
                 HelperLog.logger.fault("The app closed \(self.connectionsWithoutData, privacy: .public) connections in a row before sending anything, so it rejects this helper; giving up")

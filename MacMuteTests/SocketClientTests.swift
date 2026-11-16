@@ -338,6 +338,32 @@ final class SocketClientTests: XCTestCase {
         wait(for: [stopped], timeout: 2)
     }
 
+    func testAWriteThatFindsTheAppGoneBeforeAnyDataCountsAsARejection() throws {
+        let app = try FakeApp(path: socketPath)
+        client = makeClient(verifyApp: { [weak self] in
+            .success { _ in
+                guard let connection = try? app.acceptConnection() else { return .failure(.peerTokenUnavailable(errno: ENOTCONN)) }
+                app.close(connection)
+                self?.client.sendMessage(["type": "state_update"])
+                return .success(())
+            }
+        }, maxConnectionsWithoutData: 1)
+        let stopped = expectState(.stopped(.rejectedByApp))
+
+        client.start()
+
+        wait(for: [stopped], timeout: 2)
+    }
+
+    func testOnlyACleanCloseByTheAppCanMeanARejection() {
+        XCTAssertEqual(SocketClient.connectionEnd(afterReadReturning: 0, errno: 0), .closedByApp)
+        XCTAssertEqual(SocketClient.connectionEnd(afterReadReturning: -1, errno: ECONNRESET), .failed)
+        XCTAssertEqual(SocketClient.connectionEnd(afterWriteFailingWith: EPIPE), .closedByApp)
+        XCTAssertEqual(SocketClient.connectionEnd(afterWriteFailingWith: ECONNRESET), .failed)
+        XCTAssertEqual(SocketClient.connectionEnd(afterWriteFailingWith: EAGAIN), .failed)
+        XCTAssertEqual(SocketClient.connectionEnd(afterWriteFailingWith: nil), .failed)
+    }
+
     func testDataFromTheAppStartsTheRejectionCountOver() {
         client = makeClient(maxConnectionsWithoutData: 2)
         startServer()
