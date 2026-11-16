@@ -104,13 +104,20 @@ struct ShortcutConfigView: View {
             if !isRecording { removeMonitor(&cameraRecordingMonitor) }
             updateGlobalShortcutSuspension()
         }
-        .onDisappear {
-            isRecordingMic = false
-            isRecordingCamera = false
-            removeMonitor(&micRecordingMonitor)
-            removeMonitor(&cameraRecordingMonitor)
-            GlobalShortcutManager.shared.setShortcutsSuspended(false)
+        .onDisappear { endRecording() }
+        // onDisappear is not guaranteed when the transient popover closes, and a recording left
+        // running would keep the global shortcuts suspended.
+        .onReceive(NotificationCenter.default.publisher(for: NSPopover.willCloseNotification)) { _ in
+            endRecording()
         }
+    }
+
+    private func endRecording() {
+        isRecordingMic = false
+        isRecordingCamera = false
+        removeMonitor(&micRecordingMonitor)
+        removeMonitor(&cameraRecordingMonitor)
+        GlobalShortcutManager.shared.setShortcutsSuspended(false)
     }
 
     // The global event tap sees key events before this view's local monitor, so it must let
