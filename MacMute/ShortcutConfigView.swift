@@ -5,6 +5,8 @@ struct ShortcutConfigView: View {
     @State private var isRecordingMic = false
     @State private var isRecordingCamera = false
     @State private var showColorSettings = false
+    @State private var micRecordingMonitor: Any?
+    @State private var cameraRecordingMonitor: Any?
 
     var body: some View {
         VStack(spacing: 12) {
@@ -29,6 +31,8 @@ struct ShortcutConfigView: View {
                 label: "Mic Shortcut",
                 isRecording: $isRecordingMic,
                 defaultsKey: "globalShortcut",
+                keyCodeKey: "shortcutKeyCode",
+                modifiersKey: "shortcutModifiers",
                 onRecord: { startRecordingMic() }
             )
 
@@ -48,6 +52,8 @@ struct ShortcutConfigView: View {
                 label: "Camera Shortcut",
                 isRecording: $isRecordingCamera,
                 defaultsKey: "cameraShortcut",
+                keyCodeKey: "cameraShortcutKeyCode",
+                modifiersKey: "cameraShortcutModifiers",
                 onRecord: { startRecordingCamera() }
             )
 
@@ -86,10 +92,30 @@ struct ShortcutConfigView: View {
         .padding()
         .frame(width: 280)
         .fixedSize(horizontal: false, vertical: true)
+        .onChange(of: isRecordingMic) { isRecording in
+            if !isRecording { removeMonitor(&micRecordingMonitor) }
+        }
+        .onChange(of: isRecordingCamera) { isRecording in
+            if !isRecording { removeMonitor(&cameraRecordingMonitor) }
+        }
+        .onDisappear {
+            isRecordingMic = false
+            isRecordingCamera = false
+            removeMonitor(&micRecordingMonitor)
+            removeMonitor(&cameraRecordingMonitor)
+        }
+    }
+
+    private func removeMonitor(_ monitor: inout Any?) {
+        if let existing = monitor {
+            NSEvent.removeMonitor(existing)
+        }
+        monitor = nil
     }
 
     private func startRecordingMic() {
-        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        removeMonitor(&micRecordingMonitor)
+        micRecordingMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             guard self.isRecordingMic else { return event }
 
             var parts: [String] = []
@@ -116,7 +142,8 @@ struct ShortcutConfigView: View {
     }
 
     private func startRecordingCamera() {
-        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        removeMonitor(&cameraRecordingMonitor)
+        cameraRecordingMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             guard self.isRecordingCamera else { return event }
 
             var parts: [String] = []
@@ -199,6 +226,8 @@ private struct ShortcutRow: View {
     let label: String
     @Binding var isRecording: Bool
     let defaultsKey: String
+    let keyCodeKey: String
+    let modifiersKey: String
     let onRecord: () -> Void
 
     var body: some View {
@@ -228,12 +257,31 @@ private struct ShortcutRow: View {
                 }
                 .buttonStyle(.bordered)
             }
+
+            if showsShiftOnlyWarning {
+                Label(
+                    "With Shift as the only modifier, \(currentDisplay) can't be typed in any app while this shortcut is set.",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.caption)
+                .foregroundColor(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+            }
         }
+    }
+
+    private var showsShiftOnlyWarning: Bool {
+        guard !isRecording else { return false }
+        return storedShortcut?.usesShiftAsOnlyModifier ?? false
+    }
+
+    private var storedShortcut: Shortcut? {
+        ShortcutStore.read(keyCodeKey: keyCodeKey, modifiersKey: modifiersKey, from: .standard).shortcut
     }
 
     private var currentDisplay: String {
         if isRecording { return "Press shortcut..." }
         let saved = UserDefaults.standard.string(forKey: defaultsKey) ?? ""
-        return saved.isEmpty ? "Not configured" : saved
+        return saved.isEmpty || storedShortcut == nil ? "Not configured" : saved
     }
 }

@@ -4,12 +4,31 @@ import os
 struct Shortcut: Equatable {
     let keyCode: UInt16
     let modifiers: CGEventFlags
+
+    var usesShiftAsOnlyModifier: Bool {
+        modifiers.intersection(ShortcutMatcher.relevantModifiers) == .maskShift
+    }
 }
 
 enum ShortcutMatch: Equatable {
     case triggered(ToggleTarget)
+    case repeated(ToggleTarget)
     case modifiersMismatch(ToggleTarget)
     case none
+
+    var action: ShortcutEventAction {
+        switch self {
+        case let .triggered(target): return .toggle(target)
+        case .repeated: return .consume
+        case .modifiersMismatch, .none: return .pass
+        }
+    }
+}
+
+enum ShortcutEventAction: Equatable {
+    case toggle(ToggleTarget)
+    case consume
+    case pass
 }
 
 struct ShortcutMatcher {
@@ -18,19 +37,66 @@ struct ShortcutMatcher {
     var mic: Shortcut?
     var camera: Shortcut?
 
-    func match(keyCode: UInt16, flags: CGEventFlags) -> ShortcutMatch {
+    func action(for event: CGEvent) -> ShortcutEventAction {
+        match(event).action
+    }
+
+    func match(_ event: CGEvent) -> ShortcutMatch {
+        match(
+            keyCode: UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode)),
+            flags: event.flags,
+            isAutorepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+        )
+    }
+
+    func match(keyCode: UInt16, flags: CGEventFlags, isAutorepeat: Bool) -> ShortcutMatch {
         let pressed = flags.intersection(Self.relevantModifiers)
         let configured = [(ToggleTarget.mic, mic), (.camera, camera)]
             .compactMap { target, shortcut in shortcut.map { (target, $0) } }
             .filter { $0.1.keyCode == keyCode }
 
         if let (target, _) = configured.first(where: { $0.1.modifiers.intersection(Self.relevantModifiers) == pressed }) {
-            return .triggered(target)
+            return isAutorepeat ? .repeated(target) : .triggered(target)
         }
         if let (target, _) = configured.first {
             return .modifiersMismatch(target)
         }
         return .none
+    }
+}
+
+enum ShortcutReadResult: Equatable {
+    case configured(Shortcut)
+    case notConfigured
+    case invalid(keyCode: Int, modifiersRaw: Int)
+
+    var shortcut: Shortcut? {
+        if case let .configured(shortcut) = self { return shortcut }
+        return nil
+    }
+}
+
+enum ShortcutStore {
+    static func read(keyCodeKey: String, modifiersKey: String, from defaults: UserDefaults) -> ShortcutReadResult {
+        // keyCode 0 is the A key, so presence of the value marks a configured shortcut.
+        guard defaults.object(forKey: keyCodeKey) != nil else { return .notConfigured }
+        let keyCode = defaults.integer(forKey: keyCodeKey)
+        let modifiersRaw = defaults.integer(forKey: modifiersKey)
+        let modifiers = cgFlags(from: modifiersRaw)
+        guard !modifiers.isEmpty, let validKeyCode = UInt16(exactly: keyCode) else {
+            return .invalid(keyCode: keyCode, modifiersRaw: modifiersRaw)
+        }
+        return .configured(Shortcut(keyCode: validKeyCode, modifiers: modifiers))
+    }
+
+    private static func cgFlags(from modifiersRaw: Int) -> CGEventFlags {
+        let nsFlags = NSEvent.ModifierFlags(rawValue: UInt(modifiersRaw))
+        var cgFlags: CGEventFlags = []
+        if nsFlags.contains(.command) { cgFlags.insert(.maskCommand) }
+        if nsFlags.contains(.control) { cgFlags.insert(.maskControl) }
+        if nsFlags.contains(.option) { cgFlags.insert(.maskAlternate) }
+        if nsFlags.contains(.shift) { cgFlags.insert(.maskShift) }
+        return cgFlags
     }
 }
 
@@ -86,7 +152,7 @@ class GlobalShortcutManager {
             options: .defaultTap,
             eventsOfInterest: eventMask,
             callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
-                guard let refcon = refcon else { return Unmanaged.passRetained(event) }
+                guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
                 let manager = Unmanaged<GlobalShortcutManager>.fromOpaque(refcon).takeUnretainedValue()
                 return manager.handleEvent(proxy: proxy, type: type, event: event)
             },
@@ -136,26 +202,17 @@ class GlobalShortcutManager {
     }
 
     private func readShortcut(keyCodeKey: String, modifiersKey: String, target: ToggleTarget) -> Shortcut? {
-        let keyCode = UserDefaults.standard.integer(forKey: keyCodeKey)
-        let modifiersRaw = UserDefaults.standard.integer(forKey: modifiersKey)
-
-        guard keyCode != 0 && modifiersRaw != 0 else {
+        switch ShortcutStore.read(keyCodeKey: keyCodeKey, modifiersKey: modifiersKey, from: .standard) {
+        case let .configured(shortcut):
+            logger.notice("\(target.rawValue, privacy: .public) shortcut configured: keyCode \(shortcut.keyCode, privacy: .public), modifiers \(Self.describe(shortcut.modifiers), privacy: .public)")
+            return shortcut
+        case .notConfigured:
             logger.notice("No \(target.rawValue, privacy: .public) shortcut configured")
             return nil
+        case let .invalid(keyCode, modifiersRaw):
+            logger.error("Ignoring invalid \(target.rawValue, privacy: .public) shortcut: keyCode \(keyCode, privacy: .public), modifiers raw \(modifiersRaw, privacy: .public)")
+            return nil
         }
-        let shortcut = Shortcut(keyCode: UInt16(keyCode), modifiers: cgFlags(from: modifiersRaw))
-        logger.notice("\(target.rawValue, privacy: .public) shortcut configured: keyCode \(shortcut.keyCode, privacy: .public), modifiers \(Self.describe(shortcut.modifiers), privacy: .public)")
-        return shortcut
-    }
-
-    private func cgFlags(from modifiersRaw: Int) -> CGEventFlags {
-        let nsFlags = NSEvent.ModifierFlags(rawValue: UInt(modifiersRaw))
-        var cgFlags: CGEventFlags = []
-        if nsFlags.contains(.command) { cgFlags.insert(.maskCommand) }
-        if nsFlags.contains(.control) { cgFlags.insert(.maskControl) }
-        if nsFlags.contains(.option) { cgFlags.insert(.maskAlternate) }
-        if nsFlags.contains(.shift) { cgFlags.insert(.maskShift) }
-        return cgFlags
     }
 
     private static func describe(_ flags: CGEventFlags) -> String {
@@ -172,16 +229,20 @@ class GlobalShortcutManager {
             if let tap = eventTap {
                 CGEvent.tapEnable(tap: tap, enable: true)
             }
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
 
         guard type == .keyDown else {
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
 
-        let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
-        switch matcher.match(keyCode: keyCode, flags: event.flags) {
-        case let .triggered(target):
+        let match = matcher.match(event)
+        if case let .modifiersMismatch(target) = match {
+            logger.debug("\(target.rawValue, privacy: .public) shortcut key pressed with modifiers \(Self.describe(event.flags.intersection(ShortcutMatcher.relevantModifiers)), privacy: .public), not matching")
+        }
+
+        switch match.action {
+        case let .toggle(target):
             logger.notice("\(target.rawValue, privacy: .public) shortcut pressed")
             DispatchQueue.main.async { [weak self] in
                 switch target {
@@ -189,12 +250,11 @@ class GlobalShortcutManager {
                 case .camera: self?.onCameraShortcutTriggered?()
                 }
             }
-            return nil // Consume the event
-        case let .modifiersMismatch(target):
-            logger.debug("\(target.rawValue, privacy: .public) shortcut key pressed with modifiers \(Self.describe(event.flags.intersection(ShortcutMatcher.relevantModifiers)), privacy: .public), not matching")
-            return Unmanaged.passRetained(event)
-        case .none:
-            return Unmanaged.passRetained(event)
+            return nil
+        case .consume:
+            return nil
+        case .pass:
+            return Unmanaged.passUnretained(event)
         }
     }
 }
