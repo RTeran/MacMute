@@ -68,24 +68,24 @@ class SocketServer {
             .appendingPathComponent("Library/Application Support/MacMute")
         self.init(
             socketPath: appSupport.appendingPathComponent("macmute.sock").path,
-            makeVerifyPeer: Self.trustedHelperCheck(appBundle: Bundle.main.bundleURL, ownCode: PeerCodeVerifier.ownStaticCode)
+            makeVerifyPeer: Self.trustedHelperCheck(appBundle: Bundle.main.bundleURL, ownCode: PeerCodeVerifier.ownCode)
         )
     }
 
     static func trustedHelperCheck(
         appBundle: URL,
-        ownCode: @escaping () -> Result<SecStaticCode, PeerVerificationError>
+        ownCode: @escaping () -> Result<OwnCode, PeerVerificationError>
     ) -> MakeVerifyPeer {
         {
             trustedHelperRequirement(appBundle: appBundle, ownCode: ownCode)
-                .map { requirement in { socket in PeerCodeVerifier.verify(socket: socket, against: requirement) } }
+                .map { trusted in { socket in PeerCodeVerifier.verify(socket: socket, against: trusted) } }
         }
     }
 
     static func trustedHelperRequirement(
         appBundle: URL,
-        ownCode: () -> Result<SecStaticCode, PeerVerificationError>
-    ) -> Result<SecRequirement, PeerVerificationError> {
+        ownCode: () -> Result<OwnCode, PeerVerificationError>
+    ) -> Result<TrustedPeer, PeerVerificationError> {
         ownCode().flatMap {
             PeerCodeVerifier.trustedHelperRequirement(
                 signedLike: $0,

@@ -292,7 +292,7 @@ final class SocketClientTests: XCTestCase {
 
     func testConnectsToAnAppThatSatisfiesTheRealRequirement() throws {
         let requirement = try ownDesignatedRequirement()
-        client = makeClient(verifyApp: { .success { PeerCodeVerifier.verify(socket: $0, against: requirement) } })
+        client = makeClient(verifyApp: { .success { PeerCodeVerifier.verify(socket: $0, against: TrustedPeer(requirement: requirement, requiresHardenedRuntime: false)) } })
         startServer()
         let connected = expectState(.connected)
 
@@ -305,7 +305,7 @@ final class SocketClientTests: XCTestCase {
         var requirement: SecRequirement?
         XCTAssertEqual(SecRequirementCreateWithString(#"identifier "com.macmute.app""# as CFString, [], &requirement), errSecSuccess)
         let appRequirement = try XCTUnwrap(requirement)
-        client = makeClient(verifyApp: { .success { PeerCodeVerifier.verify(socket: $0, against: appRequirement) } })
+        client = makeClient(verifyApp: { .success { PeerCodeVerifier.verify(socket: $0, against: TrustedPeer(requirement: appRequirement, requiresHardenedRuntime: false)) } })
         startServer()
         waitUntilListening()
         let thirdRetry = expectState(.waiting(retryIn: 0.05))
@@ -330,7 +330,7 @@ final class SocketClientTests: XCTestCase {
 
     func testStopsWhenTheAppRejectsItWhileTheHelperVerifiesTheApp() throws {
         let requirement = try ownDesignatedRequirement()
-        client = makeClient(verifyApp: { .success { PeerCodeVerifier.verify(socket: $0, against: requirement) } }, maxConnectionsWithoutData: 3)
+        client = makeClient(verifyApp: { .success { PeerCodeVerifier.verify(socket: $0, against: TrustedPeer(requirement: requirement, requiresHardenedRuntime: false)) } }, maxConnectionsWithoutData: 3)
         startServer(rejectingHelpers: true)
         let stopped = expectState(.stopped(.rejectedByApp))
 
@@ -470,7 +470,7 @@ final class SocketClientTests: XCTestCase {
         XCTAssertEqual(SecStaticCodeCreateWithPath(Bundle(for: Self.self).bundleURL as CFURL, [], &code), errSecSuccess)
         let testBundle = try XCTUnwrap(code)
 
-        let result = SocketClient.trustedAppCheck(ownCode: { .success(testBundle) })()
+        let result = SocketClient.trustedAppCheck(ownCode: { .success(OwnCode(staticCode: testBundle, leaf: nil)) })()
 
         guard case .failure(.notInsideAnApp) = result else {
             return XCTFail("Expected notInsideAnApp, got \(result)")
@@ -485,7 +485,7 @@ final class SocketClientTests: XCTestCase {
         let helperCode = try staticCode(at: helper)
         try skipUnlessAdHoc(helperCode)
 
-        let result = SocketClient.trustedAppCheck(ownCode: { .success(helperCode) })()
+        let result = SocketClient.trustedAppCheck(ownCode: { .success(OwnCode(staticCode: helperCode, leaf: nil)) })()
 
         guard case let .failure(.expectedCodeUnavailable(path, _)) = result else {
             return XCTFail("Expected the requirement to read the containing app, got \(result)")
@@ -502,10 +502,37 @@ final class SocketClientTests: XCTestCase {
         XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &sockets), 0)
         defer { sockets.forEach { close($0) } }
 
-        let verify = try SocketClient.trustedAppCheck(ownCode: { .success(helperCode) })().get()
+        let verify = try SocketClient.trustedAppCheck(ownCode: { PeerCodeVerifier.signingIdentity(of: helperCode).map { OwnCode(staticCode: helperCode, leaf: $0.leaf) } })().get()
 
         guard case .failure(.requirementNotSatisfied) = verify(sockets[0]) else {
             return XCTFail("Expected the test process to fail the app requirement")
+        }
+    }
+
+    func testASignedHelperInsideAnAppRequiresTheHardenedRuntimeFromTheApp() throws {
+        let helper = socketDirectory.appendingPathComponent("Fake.app/Contents/Resources/MacMuteHelper")
+        try FileManager.default.createDirectory(at: helper.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: "/bin/ls"), to: helper)
+        let helperCode = try staticCode(at: helper)
+
+        let trusted = try SocketClient.trustedApp(ownCode: { PeerCodeVerifier.signingIdentity(of: helperCode).map { OwnCode(staticCode: helperCode, leaf: $0.leaf) } }).get()
+
+        XCTAssertTrue(trusted.requiresHardenedRuntime)
+    }
+
+    func testAHelperWhoseSignatureOnDiskIsNotTheRunningCodeTrustsNoApp() throws {
+        let helper = socketDirectory.appendingPathComponent("Fake.app/Contents/Resources/MacMuteHelper")
+        try FileManager.default.createDirectory(at: helper.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: "/bin/ls"), to: helper)
+        let swappedOnDisk = try staticCode(at: helper)
+        var running: SecCode?
+        XCTAssertEqual(SecCodeCopySelf([], &running), errSecSuccess)
+        let runningCode = try XCTUnwrap(running)
+
+        let result = SocketClient.trustedApp(ownCode: { PeerCodeVerifier.ownCode(running: runningCode, onDisk: swappedOnDisk) })
+
+        guard case .failure(.ownSignatureInvalid) = result else {
+            return XCTFail("Expected ownSignatureInvalid, got \(result)")
         }
     }
 

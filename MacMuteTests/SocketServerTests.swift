@@ -213,18 +213,20 @@ final class SocketServerTests: XCTestCase {
 
     func testTheProductionRequirementOfASignedAppNamesTheHelperIdentifier() throws {
         let app = socketDirectory.appendingPathComponent("Signed.app")
-        let signedApp: () -> Result<SecStaticCode, PeerVerificationError> = {
+        let signedApp: () -> Result<OwnCode, PeerVerificationError> = {
             var code: SecStaticCode?
             let status = SecStaticCodeCreateWithPath(URL(fileURLWithPath: "/bin/ls") as CFURL, [], &code)
-            return code.map { .success($0) } ?? .failure(.ownSignatureUnavailable(status))
+            guard let code else { return .failure(.ownSignatureUnavailable(status)) }
+            return PeerCodeVerifier.signingIdentity(of: code).map { OwnCode(staticCode: code, leaf: $0.leaf) }
         }
 
         let requirement = try SocketServer.trustedHelperRequirement(appBundle: app, ownCode: signedApp).get()
 
         var text: CFString?
-        XCTAssertEqual(SecRequirementCopyString(requirement, [], &text), errSecSuccess)
+        XCTAssertEqual(SecRequirementCopyString(requirement.requirement, [], &text), errSecSuccess)
         let expectedPrefix = "identifier \"\(PeerCodeVerifier.helperIdentifier)\" and certificate leaf"
         XCTAssertTrue((text as String?)?.hasPrefix(expectedPrefix) == true, text as String? ?? "nil")
+        XCTAssertTrue(requirement.requiresHardenedRuntime)
     }
 
     func testTheHelperIsSignedWithTheIdentifierTheAppTrusts() throws {
@@ -837,16 +839,16 @@ final class SocketServerTests: XCTestCase {
         return info.st_ino
     }
 
-    private func adHocCode() -> Result<SecStaticCode, PeerVerificationError> {
+    private func adHocCode() -> Result<OwnCode, PeerVerificationError> {
         var code: SecStaticCode?
         let status = SecStaticCodeCreateWithPath(Bundle(for: Self.self).bundleURL as CFURL, [], &code)
-        return code.map { .success($0) } ?? .failure(.ownSignatureUnavailable(status))
+        return code.map { .success(OwnCode(staticCode: $0, leaf: nil)) } ?? .failure(.ownSignatureUnavailable(status))
     }
 
     // The running process stands in for the helper, so a socketpair peer satisfies its requirement.
     private func appBundle(withHelper: Bool) throws -> URL {
         var info: CFDictionary?
-        XCTAssertEqual(SecCodeCopySigningInformation(try adHocCode().get(), SecCSFlags(rawValue: kSecCSSigningInformation), &info), errSecSuccess)
+        XCTAssertEqual(SecCodeCopySigningInformation(try adHocCode().get().staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info), errSecSuccess)
         if let certificates = (info as? [String: Any])?[kSecCodeInfoCertificates as String] as? [Any], !certificates.isEmpty {
             throw XCTSkip("The test bundle is signed with a certificate; these tests need an ad-hoc one")
         }

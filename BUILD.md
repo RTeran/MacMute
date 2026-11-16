@@ -14,6 +14,14 @@ Open the project in Xcode and build in Release mode from the command line:
 xcodebuild -project MacMute.xcodeproj -scheme MacMute -configuration Release build
 ```
 
+## Signing
+
+The recommended build is the one that `scripts/release.sh` makes: it signs the app and the helper with the MacMute certificate and the hardened runtime. See "Publish a release" in [README.md](README.md).
+
+The commands in this file make an ad-hoc build instead. An ad-hoc app trusts the helper that is in its `Contents/Resources` folder when it starts. Another program running as your user could replace that helper between two launches.
+
+Do not mix a Debug build from Xcode with a build in `/Applications`. Each one trusts only the helper inside its own bundle, so they reject each other's helper. MacMute already refuses to start a second instance, and the app that is running writes the native messaging manifest so that it points to its own helper. When you switch builds, quit the other one first, then check that `path` in `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.macmute.helper.json` is inside the app you are running.
+
 ## Install to /Applications
 
 Copy the built app to `/Applications`:

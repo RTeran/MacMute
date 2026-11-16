@@ -22,10 +22,19 @@ Global shortcut ─▶ MacMute.app ─▶ MacMuteHelper ─▶ Chrome extension 
 
 ## Install
 
-Download both files from the [latest release](https://github.com/RTeran/MacMute/releases/latest):
+Download these files from the [latest release](https://github.com/RTeran/MacMute/releases/latest) into the same folder:
 
 - `MacMute-app.zip`: the menu-bar app (universal: Apple Silicon and Intel).
 - `MacMute-chrome-extension.zip`: the Chrome extension.
+- `SHA256SUMS.txt`: the checksums of both zips.
+
+Before you unzip anything, check the downloads. In Terminal, go to that folder and run:
+
+```bash
+shasum -a 256 -c SHA256SUMS.txt --ignore-missing
+```
+
+Each zip must show `OK`. If one does not, delete it and download it again.
 
 You need macOS 13 (Ventura) or later and Google Chrome 111 or later.
 
@@ -44,15 +53,22 @@ The folder name does not matter. Load only one copy of the extension in each Chr
 ### 2. Install the app
 
 1. Unzip `MacMute-app.zip` and move `MacMute.app` to `/Applications`.
-2. Open it once. The app is not notarized by Apple, so macOS blocks it the first time with a message like *"MacMute" cannot be opened* or *Apple could not verify "MacMute"*. Allow it in one of these two ways:
-   - Open **System Settings → Privacy & Security**, scroll down to the message about MacMute and click **Open Anyway**. Then open the app again.
-   - Or run this command in Terminal:
+2. Check that the app is signed with the MacMute certificate:
 
-     ```bash
-     xattr -dr com.apple.quarantine /Applications/MacMute.app
-     ```
+   ```bash
+   codesign -dr - /Applications/MacMute.app
+   ```
 
-3. Grant **Accessibility** permission when asked (System Settings → Privacy & Security → Accessibility). Global shortcuts need it.
+   The output must contain `H"a1e6433add851ccfcaff6f2b055d0af0188cc63d"`, the hash of the MacMute certificate. If it does not, delete the app and do not open it.
+3. Open it once. The app is not notarized by Apple, so macOS blocks it the first time with a message like *"MacMute" cannot be opened* or *Apple could not verify "MacMute"*. Open **System Settings → Privacy & Security**, scroll down to the message about MacMute and click **Open Anyway**. Then open the app again.
+
+   If **Open Anyway** does not appear, and only after the checks above passed, remove the quarantine flag instead:
+
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/MacMute.app
+   ```
+
+4. Grant **Accessibility** permission when asked (System Settings → Privacy & Security → Accessibility). Global shortcuts need it.
 
 ### 3. Connect them
 
@@ -64,12 +80,19 @@ The folder name does not matter. Load only one copy of the extension in each Chr
 
 One time only: if you loaded the extension before it had a fixed ID, its ID changes with this update and the app accepts only the new one. In step 3, do not click reload: remove the extension in `chrome://extensions` and add it again with **Load unpacked**, then check that `chrome://extensions` shows the ID `ealicgogcpkafcocpppnmhgcaiepdple`.
 
-1. Download the new files from the [latest release](https://github.com/RTeran/MacMute/releases/latest).
-2. Quit MacMute, replace `/Applications/MacMute.app` with the new one and allow it again as in step 2.
+1. Download the new files from the [latest release](https://github.com/RTeran/MacMute/releases/latest), including `SHA256SUMS.txt`, and check them as in [Install](#install).
+2. Quit MacMute before replacing it. Then replace `/Applications/MacMute.app` with the new one, and check and allow it again as in [2. Install the app](#2-install-the-app).
 3. Replace the contents of your `MacMute-chrome-extension` folder with the new ones and click reload in `chrome://extensions`.
 4. Reload the Meet tab.
 
-Since 1.1, every release is signed with the same certificate, so macOS keeps the Accessibility permission after an update. When you update from 1.0, grant it once more: if the shortcuts stop working, remove MacMute from the Accessibility list and add it again.
+Releases after 1.1 are signed with a new certificate, so macOS treats them as a different app and you must grant **Accessibility** and **Microphone** again, once. This is on purpose: older releases have no hardened runtime, and another program running as your user could put one of them back and inject code into it. The old grants must not stay with them. When you update from 1.1 or older, quit MacMute and remove its old permissions before you open the new version:
+
+```bash
+tccutil reset Accessibility com.macmute.app
+tccutil reset Microphone com.macmute.app
+```
+
+Then open the new MacMute and grant both permissions when asked. Later releases keep the same certificate, so macOS keeps the permissions after an update.
 
 ### Uninstall
 
@@ -92,6 +115,12 @@ Each shortcut press logs the request and its result (`toggle_result`), including
 ## Known limits
 
 The extension's ID comes from the public `key` in `chrome-extension/manifest.json`. Another unpacked extension that copies this key gets the same ID and can talk to the app. Only an unpacked extension can do this. The Chrome Web Store assigns its own ID, so a store version would need a new allowed origin.
+
+A program that runs as your user can start the real helper itself and send fake messages to the app through the helper's standard input. The app cannot tell these messages from Chrome's. This risk is accepted: such a program already runs with your permissions.
+
+The same kind of program could create the app's socket, `~/Library/Application Support/MacMute/macmute.sock`, and then start the real app inside its own process (fork, then exec). It is not verified whether the helper would accept that app. This risk is also accepted.
+
+The app and the helper only accept each other from this release on. v1.0 is not signed with the MacMute certificate (it is ad-hoc), and v1.1 is signed with the old certificate and runs without the hardened runtime, so the new app and helper reject both. Do not mix versions: run only the latest MacMute.
 
 ## Development
 
@@ -124,19 +153,27 @@ xcodebuild -project MacMute.xcodeproj -scheme MacMute build
 
 ### Publish a release
 
-Releases are signed with a self-signed certificate named `MacMute Code Signing`. It is not trusted by Apple, so Gatekeeper still asks users to allow the app once, but its identity stays the same between releases and macOS keeps the Accessibility permission. Releases signed with a different certificate make every user grant the permission again, so keep a backup of it.
+Releases are signed with a self-signed certificate named `MacMute Code Signing 2026`. It is not trusted by Apple, so Gatekeeper still asks users to allow the app once, but its identity stays the same between releases and macOS keeps the Accessibility and Microphone permissions. Releases signed with a different certificate make every user grant the permissions again, so keep a backup of it. Releases up to 1.1 used an older certificate named `MacMute Code Signing`; it can stay in the keychain, but do not sign with it.
 
-The certificate must be in your login keychain. To use it on another Mac, import the backup `.p12` file:
+To create the certificate, open Keychain Access (`open -a "Keychain Access"`) and choose **Certificate Assistant → Create a Certificate…**. Use the name `MacMute Code Signing 2026`, identity type **Self Signed Root**, certificate type **Code Signing**, and tick **Let me override defaults**: validity 3650 days, RSA 2048-bit key, Key Usage **Signature** (critical), Extended Key Usage **Code Signing** (critical), Basic Constraints not a certificate authority, keychain **login**. Leave the email and every optional subject field empty. Keychain Access requires a country, so the certificate carries only the Common Name and the country. The certificate is embedded in every release, so both are public. Then print its SHA-1, which goes in lowercase into `LEAF_PIN`:
 
 ```bash
-security import MacMute-signing.p12 -k ~/Library/Keychains/login.keychain-db -T /usr/bin/codesign
+security find-identity -p codesigning | grep '"MacMute Code Signing 2026"'
+```
+
+Export it with its key as a `.p12` file and keep the backup off the Mac. The certificate must be in your login keychain. To use it on another Mac, import the backup:
+
+```bash
+security import MacMute-signing-2026.p12 -k ~/Library/Keychains/login.keychain-db -T /usr/bin/codesign
 ```
 
 Build a universal app, sign it and package both downloads into `dist/`:
 
 ```bash
 ./scripts/release.sh
-gh release create vX.Y dist/MacMute-app.zip dist/MacMute-chrome-extension.zip
+gh release create vX.Y dist/MacMute-app.zip dist/MacMute-chrome-extension.zip dist/SHA256SUMS.txt
 ```
 
 To sign with another identity, set `MACMUTE_SIGNING_IDENTITY`.
+
+Releases pin the SHA-1 hash of the signing certificate: the app and the helper refuse to connect unless they are signed with that exact certificate. A new certificate means updating `LEAF_PIN` in `scripts/release.sh`. The script stops before building if `LEAF_PIN` does not match the certificate of the signing identity.
