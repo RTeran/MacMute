@@ -17,15 +17,19 @@ func preview(_ message: [String: Any]) -> String {
         let value = message[key]!
         let described = "\(key):\(jsonTypeName(value))"
         guard ["type", "target"].contains(key), let text = value as? String else { return described }
-        return "\(described)=\"\(preview(text))\""
+        return "\(described)=\"\(text)\""
     }
     return preview(fields.joined(separator: ", "))
 }
 
+// Format characters include the bidi controls (U+202E, U+2066-2069) that can make a line read
+// differently from what it contains.
+private let escapedCategories: Set<Unicode.GeneralCategory> = [.control, .format, .lineSeparator, .paragraphSeparator]
+
 private func escapingControlCharacters(_ text: String) -> String {
     var escaped = String.UnicodeScalarView()
     for scalar in text.unicodeScalars {
-        if scalar.properties.generalCategory == .control {
+        if escapedCategories.contains(scalar.properties.generalCategory) {
             escaped.append(contentsOf: "\\u{\(String(scalar.value, radix: 16, uppercase: true))}".unicodeScalars)
         } else {
             escaped.append(scalar)

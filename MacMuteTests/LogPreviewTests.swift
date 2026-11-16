@@ -27,6 +27,27 @@ final class LogPreviewTests: XCTestCase {
         XCTAssertEqual(preview("a\nfake line\u{1B}"), "a\\u{A}fake line\\u{1B}")
     }
 
+    func testEscapesInvisibleAndLineBreakingCharacters() {
+        XCTAssertEqual(preview("a\u{2028}b\u{2029}c\u{202E}d\u{2066}e"), "a\\u{2028}b\\u{2029}c\\u{202E}d\\u{2066}e")
+        XCTAssertEqual(preview("a\u{85}b\u{7F}c"), "a\\u{85}b\\u{7F}c")
+    }
+
+    func testEscapesBeforeCutting() {
+        let text = String(repeating: "\n", count: 200)
+
+        XCTAssertEqual(preview(text), String(repeating: "\\u{A}", count: 25) + "\\u{" + "… (1000 bytes)")
+    }
+
+    func testNamesArrayObjectAndNullValues() {
+        let message: [String: Any] = ["list": [1], "object": ["a": 1], "nothing": NSNull()]
+
+        XCTAssertEqual(preview(message), "list:Array, nothing:Null, object:Object")
+    }
+
+    func testShowsOnlyTheTypeOfANonStringType() {
+        XCTAssertEqual(preview(["type": 5]), "type:Number")
+    }
+
     func testDescribesAMessageByItsKeysAndValueTypes() {
         let message: [String: Any] = ["muted": "yes", "ok": true, "count": 2, "reason": String(repeating: "x", count: 500)]
 
