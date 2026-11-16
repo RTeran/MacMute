@@ -25,6 +25,17 @@ final class PeerCodeVerifierTests: XCTestCase {
         }
     }
 
+    func testRejectsAPeerThatDoesNotSatisfyTheDesignatedRequirementOfOtherCode() throws {
+        var requirement: SecRequirement?
+        XCTAssertEqual(SecCodeCopyDesignatedRequirement(try staticCode(at: URL(fileURLWithPath: "/bin/ls")), [], &requirement), errSecSuccess)
+
+        let result = PeerCodeVerifier.verify(socket: sockets[0], against: try XCTUnwrap(requirement))
+
+        guard case .failure(.requirementNotSatisfied) = result else {
+            return XCTFail("Expected requirementNotSatisfied, got \(result)")
+        }
+    }
+
     func testRejectsASocketWithoutPeer() throws {
         var requirement: SecRequirement?
         XCTAssertEqual(SecRequirementCreateWithString("anchor apple" as CFString, [], &requirement), errSecSuccess)
