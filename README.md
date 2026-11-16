@@ -22,10 +22,19 @@ Global shortcut ─▶ MacMute.app ─▶ MacMuteHelper ─▶ Chrome extension 
 
 ## Install
 
-Download both files from the [latest release](https://github.com/RTeran/MacMute/releases/latest):
+Download these files from the [latest release](https://github.com/RTeran/MacMute/releases/latest) into the same folder:
 
 - `MacMute-app.zip`: the menu-bar app (universal: Apple Silicon and Intel).
 - `MacMute-chrome-extension.zip`: the Chrome extension.
+- `SHA256SUMS.txt`: the checksums of both zips.
+
+Before you unzip anything, check the downloads. In Terminal, go to that folder and run:
+
+```bash
+shasum -a 256 -c SHA256SUMS.txt --ignore-missing
+```
+
+Each zip must show `OK`. If one does not, delete it and download it again.
 
 You need macOS 13 (Ventura) or later and Google Chrome 111 or later.
 
@@ -44,15 +53,22 @@ The folder name does not matter. Load only one copy of the extension in each Chr
 ### 2. Install the app
 
 1. Unzip `MacMute-app.zip` and move `MacMute.app` to `/Applications`.
-2. Open it once. The app is not notarized by Apple, so macOS blocks it the first time with a message like *"MacMute" cannot be opened* or *Apple could not verify "MacMute"*. Allow it in one of these two ways:
-   - Open **System Settings → Privacy & Security**, scroll down to the message about MacMute and click **Open Anyway**. Then open the app again.
-   - Or run this command in Terminal:
+2. Check that the app is signed with the MacMute certificate:
 
-     ```bash
-     xattr -dr com.apple.quarantine /Applications/MacMute.app
-     ```
+   ```bash
+   codesign -dr - /Applications/MacMute.app
+   ```
 
-3. Grant **Accessibility** permission when asked (System Settings → Privacy & Security → Accessibility). Global shortcuts need it.
+   The output must contain `certificate leaf = H"ea0ccfd73df5b789344b9dfcb73d985c8be24e20"`. If it does not, delete the app and do not open it.
+3. Open it once. The app is not notarized by Apple, so macOS blocks it the first time with a message like *"MacMute" cannot be opened* or *Apple could not verify "MacMute"*. Open **System Settings → Privacy & Security**, scroll down to the message about MacMute and click **Open Anyway**. Then open the app again.
+
+   If **Open Anyway** does not appear, and only after the checks above passed, remove the quarantine flag instead:
+
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/MacMute.app
+   ```
+
+4. Grant **Accessibility** permission when asked (System Settings → Privacy & Security → Accessibility). Global shortcuts need it.
 
 ### 3. Connect them
 
@@ -64,8 +80,8 @@ The folder name does not matter. Load only one copy of the extension in each Chr
 
 One time only: if you loaded the extension before it had a fixed ID, its ID changes with this update and the app accepts only the new one. In step 3, do not click reload: remove the extension in `chrome://extensions` and add it again with **Load unpacked**, then check that `chrome://extensions` shows the ID `ealicgogcpkafcocpppnmhgcaiepdple`.
 
-1. Download the new files from the [latest release](https://github.com/RTeran/MacMute/releases/latest).
-2. Quit MacMute, replace `/Applications/MacMute.app` with the new one and allow it again as in step 2.
+1. Download the new files from the [latest release](https://github.com/RTeran/MacMute/releases/latest), including `SHA256SUMS.txt`, and check them as in [Install](#install).
+2. Quit MacMute before replacing it. Then replace `/Applications/MacMute.app` with the new one, and check and allow it again as in [2. Install the app](#2-install-the-app).
 3. Replace the contents of your `MacMute-chrome-extension` folder with the new ones and click reload in `chrome://extensions`.
 4. Reload the Meet tab.
 
@@ -92,6 +108,12 @@ Each shortcut press logs the request and its result (`toggle_result`), including
 ## Known limits
 
 The extension's ID comes from the public `key` in `chrome-extension/manifest.json`. Another unpacked extension that copies this key gets the same ID and can talk to the app. Only an unpacked extension can do this. The Chrome Web Store assigns its own ID, so a store version would need a new allowed origin.
+
+A program that runs as your user can start the real helper itself and send fake messages to the app through the helper's standard input. The app cannot tell these messages from Chrome's. This risk is accepted: such a program already runs with your permissions.
+
+The same kind of program could create the app's socket, `~/Library/Application Support/MacMute/macmute.sock`, and then start the real app inside its own process (fork, then exec). It is not verified whether the helper would accept that app. This risk is also accepted.
+
+The app and the helper only accept each other from this release on. Builds from v1.0 and v1.1 run without the hardened runtime, so the new app and helper reject them. Do not mix versions: run only the latest MacMute.
 
 ## Development
 
