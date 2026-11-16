@@ -370,6 +370,12 @@ describe("call status", () => {
     return posted().filter((message) => message.type === "call_status");
   }
 
+  const MEET_TAB_URL = "https://meet.google.com/abc-defg-hij";
+
+  function tabUpdated(tabId, changeInfo, tab) {
+    chrome.tabs.onUpdated.addListener.mock.calls[0][0](tabId, changeInfo, tab);
+  }
+
   const CALL_ENDED = [
     { type: "call_status", inCall: false },
     { type: "state_update", muted: false },
@@ -434,9 +440,46 @@ describe("call status", () => {
     contentScriptSends({ type: "state_update", muted: true }, fromTab(1));
     port.postMessage.mockClear();
 
-    chrome.tabs.onUpdated.addListener.mock.calls[0][0](1, { url: "https://example.com/" }, { id: 1 });
+    tabUpdated(1, { url: "https://example.com/" }, { id: 1, url: "https://example.com/" });
 
     expect(posted()).toEqual(CALL_ENDED);
+  });
+
+  test("ends the call when the last tab in it is discarded", () => {
+    contentScriptSends({ type: "state_update", muted: true }, fromTab(1));
+    port.postMessage.mockClear();
+
+    tabUpdated(1, { discarded: true }, { id: 1, url: MEET_TAB_URL, discarded: true });
+
+    expect(posted()).toEqual(CALL_ENDED);
+  });
+
+  test("ends the call when the tab's URL is no longer visible to the extension", () => {
+    contentScriptSends({ type: "state_update", muted: true }, fromTab(1));
+    port.postMessage.mockClear();
+
+    tabUpdated(1, { status: "loading" }, { id: 1 });
+
+    expect(posted()).toEqual(CALL_ENDED);
+  });
+
+  test("keeps the call when the tab navigates inside Meet", () => {
+    contentScriptSends({ type: "state_update", muted: true }, fromTab(1));
+    port.postMessage.mockClear();
+
+    tabUpdated(1, { url: "https://meet.google.com/landing" }, { id: 1, url: "https://meet.google.com/landing" });
+    tabUpdated(1, { title: "Meet" }, { id: 1, url: "https://meet.google.com/landing" });
+
+    expect(posted()).toEqual([]);
+  });
+
+  test("does no work when a tab outside the call is closed or updated", () => {
+    chrome.tabs.onRemoved.addListener.mock.calls[0][0](7, {});
+    tabUpdated(7, { url: "https://example.com/" }, { id: 7, url: "https://example.com/" });
+    tabUpdated(7, { discarded: true }, { id: 7, discarded: true });
+
+    expect(chrome.tabs.query).not.toHaveBeenCalled();
+    expect(posted()).toEqual([]);
   });
 
   test("rebuilds the call from the tabs' answers to get_state after a restart", async () => {

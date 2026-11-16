@@ -30,7 +30,8 @@ function connectNative() {
   }
 }
 
-const MEET_URL_PATTERN = "https://meet.google.com/*";
+const MEET_URL_PREFIX = "https://meet.google.com/";
+const MEET_URL_PATTERN = `${MEET_URL_PREFIX}*`;
 const RECEIVER_MISSING_ERROR = "Receiving end does not exist";
 const REINJECT_DELAY_MS = 200;
 const TOGGLE_TARGETS = { toggle: "mic", toggle_camera: "camera" };
@@ -236,11 +237,17 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   return false;
 });
 
-chrome.tabs.onRemoved.addListener((tabId) => setTabInCall(tabId, false));
+// These events fire for every tab in the browser, so tabs outside a call return at once.
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (!tabsInCall.has(tabId)) return;
+  setTabInCall(tabId, false);
+});
 
-// Also covers a tab hibernated by a tab suspender extension, which changes its URL.
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.url && !changeInfo.url.startsWith("https://meet.google.com/")) {
+// A tab suspender changes the tab's URL and Chrome's memory saver discards it. Without the "tabs"
+// permission, tab.url is only visible while the tab is on Meet, so a missing URL also means it left.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (!tabsInCall.has(tabId)) return;
+  if (changeInfo.discarded || !tab?.url?.startsWith(MEET_URL_PREFIX)) {
     setTabInCall(tabId, false);
   }
 });
