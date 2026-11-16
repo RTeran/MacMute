@@ -49,7 +49,7 @@ class SocketServer {
     private var isRunning = false
     private var retryBackoff: RetryBackoff
     private var pendingRetry: DispatchWorkItem?
-    private var failuresInARow = 0
+    private var lastFailure: String?
     private var listenSource: DispatchSourceRead?
     private var clients: [ClientID: Client] = [:]
     private var nextClientID: ClientID = 1
@@ -168,7 +168,7 @@ class SocketServer {
             guard let self, !self.isRunning else { return }
             self.isRunning = true
             self.retryBackoff.reset()
-            self.failuresInARow = 0
+            self.lastFailure = nil
             self.startServer()
         }
     }
@@ -338,6 +338,7 @@ class SocketServer {
         }
 
         logger.notice("Socket server listening on \(self.socketName, privacy: .public)")
+        lastFailure = nil
         report(.listening)
 
         let listeningSocket = serverSocket
@@ -406,12 +407,12 @@ class SocketServer {
     }
 
     private func failTransiently(_ message: String) {
-        // Repeats every 30 s at most, so only the first failure in a row is logged as an error.
-        let level: OSLogType = failuresInARow == 0 ? .error : .debug
+        // Repeats every 30 s at most, so a failure is logged as an error only when it is new.
+        let level: OSLogType = message == lastFailure ? .debug : .error
+        lastFailure = message
         logger.log(level: level, "\(message, privacy: .public)")
         abortStart()
         let delay = retryBackoff.nextDelay()
-        failuresInARow += 1
         let retry = DispatchWorkItem { [weak self] in
             guard let self, self.isRunning else { return }
             self.pendingRetry = nil
@@ -432,10 +433,11 @@ class SocketServer {
         guard let bound = boundFile else { return }
         boundFile = nil
         var info = stat()
-        guard lstat(socketPath, &info) == 0,
-              info.st_mode & S_IFMT == S_IFSOCK,
-              info.st_dev == bound.device,
-              info.st_ino == bound.inode else { return }
+        guard lstat(socketPath, &info) == 0 else { return }
+        guard info.st_mode & S_IFMT == S_IFSOCK, info.st_dev == bound.device, info.st_ino == bound.inode else {
+            logger.error("Leaving \(self.socketName, privacy: .public) in place: it is no longer the socket this server bound")
+            return
+        }
         unlink(socketPath)
     }
 
