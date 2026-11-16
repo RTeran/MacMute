@@ -44,7 +44,7 @@ struct CallRouter {
         entries[id] = Entry(connectedAt: tick())
     }
 
-    /// Returns the targets whose pending toggle was sent to this helper.
+    /// Returns the targets whose latest toggle was sent to this helper, whether or not it is still pending.
     @discardableResult
     mutating func disconnect(_ id: ClientID) -> [ToggleTarget] {
         entries[id] = nil

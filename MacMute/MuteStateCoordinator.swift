@@ -73,11 +73,10 @@ final class MuteStateCoordinator {
     }
 
     func helperDisconnected(_ helper: ClientID) {
-        let orphanedTargets = router.disconnect(helper)
+        let recipientTargets = router.disconnect(helper)
         refreshDisplay()
-        for target in orphanedTargets {
+        for target in recipientTargets where toggleConfirmation.failPending(target, reason: "helper_disconnected") {
             logger.error("Helper \(helper, privacy: .public) disconnected with a \(target.rawValue, privacy: .public) toggle pending")
-            toggleConfirmation.failPending(target, reason: "helper_disconnected")
         }
     }
 

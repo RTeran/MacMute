@@ -248,8 +248,9 @@ final class ToggleConfirmationTests: XCTestCase {
     func testFailingThePendingToggleShowsFeedbackAtOnce() {
         harness.confirmation.toggle(.mic)
 
-        harness.confirmation.failPending(.mic, reason: "helper_disconnected")
+        let failed = harness.confirmation.failPending(.mic, reason: "helper_disconnected")
 
+        XCTAssertTrue(failed)
         XCTAssertEqual(harness.feedbackStarts, [.mic])
         XCTAssertTrue(harness.confirmationTimer().isCancelled)
         XCTAssertNil(harness.confirmation.pendingToggles.pending[.mic])
@@ -258,8 +259,9 @@ final class ToggleConfirmationTests: XCTestCase {
     func testFailingWithoutAPendingToggleDoesNothing() {
         harness.confirmation.toggle(.camera)
 
-        harness.confirmation.failPending(.mic, reason: "helper_disconnected")
+        let failed = harness.confirmation.failPending(.mic, reason: "helper_disconnected")
 
+        XCTAssertFalse(failed)
         XCTAssertEqual(harness.feedbackStarts, [])
         XCTAssertNotNil(harness.confirmation.pendingToggles.pending[.camera])
     }

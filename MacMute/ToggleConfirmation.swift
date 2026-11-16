@@ -214,9 +214,12 @@ final class ToggleConfirmation {
     }
 
     /// Fails the toggle waiting for `target`, if any, without waiting for its timeout.
-    func failPending(_ target: ToggleTarget, reason: String) {
-        guard let toggle = pendingToggles.pending[target] else { return }
+    /// Returns whether there was one.
+    @discardableResult
+    func failPending(_ target: ToggleTarget, reason: String) -> Bool {
+        guard let toggle = pendingToggles.pending[target] else { return false }
         fail(target, requestId: toggle.requestId, reason: reason)
+        return true
     }
 
     // A passive update that reaches the state the pending press expects is as good as a toggle_result.
