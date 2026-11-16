@@ -2,10 +2,28 @@
 // Detects and controls the mute button and camera button in Google Meet
 
 (function () {
-  // Re-injection guard: Chrome may inject this script multiple times per tab.
-  // Using window (page global) ensures the guard persists across re-injections.
-  if (window.__macMuteLoaded) return;
-  window.__macMuteLoaded = true;
+  // Chrome may inject this script several times per tab, and the marker on window outlives an
+  // extension reload. The instance left behind then has a dead extension context and can no
+  // longer receive messages, so a new injection replaces it instead of bowing out.
+  const loadedInstance = window.__macMuteLoaded;
+  if (loadedInstance?.isAlive?.()) return;
+  try {
+    loadedInstance?.teardown?.();
+  } catch (error) {
+    console.warn("MacMute: could not tear down the previous content script", error?.message);
+  }
+
+  // Captured at load: after a reload this object belongs to the dead context and loses its id.
+  const extensionRuntime = chrome.runtime;
+  window.__macMuteLoaded = { isAlive: isExtensionAlive, teardown };
+
+  function isExtensionAlive() {
+    try {
+      return Boolean(extensionRuntime?.id);
+    } catch {
+      return false;
+    }
+  }
 
   let currentMuteState = null;
   let currentCameraState = null;
@@ -20,6 +38,9 @@
     'button[data-tooltip*="micrófono" i]',
   ];
 
+  const MIC_TURN_OFF_LABELS = ["turn off", "desactivar", "ausschalten", "deaktivieren"];
+  const MIC_TURN_ON_LABELS = ["turn on", "activar", "einschalten", "aktivieren"];
+
   // Selectors for the Meet camera button
   const CAMERA_BUTTON_SELECTORS = [
     'button[aria-label*="camera" i]',
@@ -29,24 +50,33 @@
     'button[data-tooltip*="cámara" i]',
   ];
 
-  function findMuteButton() {
-    for (const selector of MUTE_BUTTON_SELECTORS) {
-      const button = document.querySelector(selector);
+  // Searching the whole document with substring selectors is the costly part of reading the
+  // state, so a found button is reused while it is still in the page and still matches. Only
+  // the selectors ranked above it are searched again, so a better match still wins.
+  const buttonCache = { mic: null, camera: null };
+
+  function findButton(target, selectors) {
+    const cached = buttonCache[target];
+    const cacheValid = cached && cached.button.isConnected && cached.button.matches(selectors[cached.index]);
+    const searchUntil = cacheValid ? cached.index : selectors.length;
+    for (let index = 0; index < searchUntil; index++) {
+      const button = document.querySelector(selectors[index]);
       if (button) {
+        buttonCache[target] = { button, index };
         return button;
       }
     }
+    if (cacheValid) return cached.button;
+    buttonCache[target] = null;
     return null;
   }
 
+  function findMuteButton() {
+    return findButton("mic", MUTE_BUTTON_SELECTORS);
+  }
+
   function findCameraButton() {
-    for (const selector of CAMERA_BUTTON_SELECTORS) {
-      const button = document.querySelector(selector);
-      if (button) {
-        return button;
-      }
-    }
-    return null;
+    return findButton("camera", CAMERA_BUTTON_SELECTORS);
   }
 
   function getMuteState() {
@@ -58,24 +88,14 @@
       return button.getAttribute("data-is-muted") === "true";
     }
 
-    // Check aria-label for muted state
+    // The button names the action it performs, so a "turn on" label means the mic is muted.
+    // Each "turn off" label contains a "turn on" one ("unmute"/"mute", "desactivar"/"activar",
+    // "deaktivieren"/"aktivieren"), so the longer label is always checked first.
     const ariaLabel = (button.getAttribute("aria-label") || "").toLowerCase();
-    // "desactivar" contains "activar" as a substring, so check it first in the
-    // muted (false) block to avoid a false positive on the unmuted (true) block.
-    if (
-      ariaLabel.includes("unmute") ||
-      (ariaLabel.includes("activar") && !ariaLabel.includes("desactivar")) ||
-      ariaLabel.includes("turn on")
-    ) {
-      return true; // Button says "unmute" means mic is currently muted
-    }
-    if (
-      ariaLabel.includes("mute") ||
-      ariaLabel.includes("desactivar") ||
-      ariaLabel.includes("turn off")
-    ) {
-      return false; // Button says "mute" means mic is currently unmuted
-    }
+    if (ariaLabel.includes("unmute")) return true;
+    if (MIC_TURN_OFF_LABELS.some((label) => ariaLabel.includes(label))) return false;
+    if (MIC_TURN_ON_LABELS.some((label) => ariaLabel.includes(label))) return true;
+    if (ariaLabel.includes("mute")) return false;
 
     return null;
   }
@@ -119,7 +139,7 @@
     attributeFilter: ["data-is-muted", "aria-label", "aria-pressed"],
   };
 
-  const togglesInProgress = new Set();
+  const togglesInProgress = new Map();
 
   // Same message type as media-session-bridge.js, which runs in the page's MAIN world.
   const MEDIA_SESSION_MESSAGE_TYPE = "macmute:media-session";
@@ -184,7 +204,7 @@
         resolve(busy);
         return;
       }
-      togglesInProgress.add(target);
+      togglesInProgress.set(target, finish);
       stopLateWait(target);
 
       const failWith = (error) =>
@@ -275,7 +295,7 @@
   }
 
   // Listen for messages from background script
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  function handleExtensionMessage(message, sender, sendResponse) {
     switch (message.type) {
       case "toggle":
         respondWith(toggleMute(), sendResponse);
@@ -302,7 +322,9 @@
         break;
     }
     return false;
-  });
+  }
+
+  chrome.runtime.onMessage.addListener(handleExtensionMessage);
 
   function isMediaSessionMessage(event) {
     const data = event.data;
@@ -322,7 +344,7 @@
   // Meet also calls the Media Session outside our toggles (lobby, leaving, device loss), so a
   // signal only confirms a pending toggle, or one that just timed out, and is never reported to
   // the app on its own.
-  window.addEventListener("message", (event) => {
+  function handleMediaSessionMessage(event) {
     if (!isMediaSessionMessage(event)) return;
     const { kind, active } = event.data;
     const state = stateFromMediaSession[kind](active);
@@ -345,7 +367,9 @@
       console.debug(`MacMute: late media session ${kind} change after timeout, reporting ${state}`);
       reportState(kind, state);
     }
-  });
+  }
+
+  window.addEventListener("message", handleMediaSessionMessage);
 
   function queriedState(target, readState) {
     const mediaSessionState = mediaSessionSinceVisible[target];
@@ -365,11 +389,13 @@
     }
   }
 
-  document.addEventListener("visibilitychange", () => {
+  function handleVisibilityChange() {
     if (document.visibilityState !== "visible") return;
     mediaSessionSinceVisible.mic = undefined;
     mediaSessionSinceVisible.camera = undefined;
-  });
+  }
+
+  document.addEventListener("visibilitychange", handleVisibilityChange);
 
   function reportDomState(target, state) {
     if (state === null) return;
@@ -388,10 +414,30 @@
     }
   }
 
-  // Observe DOM for mute button appearance and state changes
-  const observer = new MutationObserver(() => {
+  // Meet mutates the page constantly, so the state is read once per burst of mutations. Toggles
+  // confirm through their own observer and are not delayed by this.
+  const STATE_REPORT_DELAY_MS = 100;
+  let stateReportTimer = null;
+
+  function reportObservedState() {
+    stateReportTimer = null;
+    if (!isExtensionAlive()) {
+      teardown();
+      return;
+    }
     reportDomState("mic", getMuteState());
     reportDomState("camera", getCameraState());
+  }
+
+  function cancelStateReport() {
+    clearTimeout(stateReportTimer);
+    stateReportTimer = null;
+  }
+
+  const observer = new MutationObserver(() => {
+    if (stateReportTimer === null) {
+      stateReportTimer = setTimeout(reportObservedState, STATE_REPORT_DELAY_MS);
+    }
   });
 
   // Start observing once the page is ready
@@ -420,6 +466,24 @@
     document.addEventListener("DOMContentLoaded", startObserving);
   }
 
+  function teardown() {
+    observer.disconnect();
+    cancelStateReport();
+    stopLateWait("mic");
+    stopLateWait("camera");
+    for (const finish of [...togglesInProgress.values()]) {
+      finish({ ok: false, reason: "torn_down", before: null, after: null });
+    }
+    window.removeEventListener("message", handleMediaSessionMessage);
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
+    document.removeEventListener("DOMContentLoaded", startObserving);
+    try {
+      chrome.runtime.onMessage.removeListener(handleExtensionMessage);
+    } catch {
+      // The extension API of an orphaned instance may already be gone.
+    }
+  }
+
   console.log("MacMute: Content script loaded on", window.location.href);
 
   // Test export shim — never runs in the browser (module is undefined there)
@@ -439,6 +503,7 @@
       MIC_STATE_CHANGE_TIMEOUT_MS,
       LATE_MEDIA_SESSION_WINDOW_MS,
       CAMERA_STATE_CHANGE_TIMEOUT_MS,
+      STATE_REPORT_DELAY_MS,
       _getObserver: () => observer,
       _getState: () => ({ currentMuteState, currentCameraState }),
       _setState: (s) => {
@@ -451,6 +516,9 @@
           mediaSessionSinceVisible.camera = undefined;
           stopLateWait("mic");
           stopLateWait("camera");
+          cancelStateReport();
+          buttonCache.mic = null;
+          buttonCache.camera = null;
           return;
         }
         currentMuteState = s.currentMuteState ?? currentMuteState;

@@ -6,9 +6,11 @@ beforeAll(() => {
 
   global.chrome = {
     runtime: {
+      id: "macmute-test",
       sendMessage: jest.fn(),
       onMessage: {
         addListener: jest.fn(),
+        removeListener: jest.fn(),
       },
     },
   };
@@ -41,8 +43,10 @@ function stubMutationObserver() {
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   document.body.innerHTML = "";
+  // Let the global observer see the cleanup now, so its report timer is cancelled below.
+  await Promise.resolve();
   jest.clearAllMocks();
   script._setState(null);
 });
@@ -148,6 +152,30 @@ describe("getMuteState", () => {
     document.body.innerHTML =
       '<button aria-label="Turn off microphone"></button>';
     expect(script.getMuteState()).toBe(false);
+  });
+
+  test("returns false when aria-label is 'Mikrofon ausschalten' (German, mic is on)", () => {
+    document.body.innerHTML =
+      '<button aria-label="Mikrofon ausschalten"></button>';
+    expect(script.getMuteState()).toBe(false);
+  });
+
+  test("returns true when aria-label is 'Mikrofon einschalten' (German, mic is muted)", () => {
+    document.body.innerHTML =
+      '<button aria-label="Mikrofon einschalten"></button>';
+    expect(script.getMuteState()).toBe(true);
+  });
+
+  test("returns false when aria-label is 'Mikrofon deaktivieren' (German, mic is on)", () => {
+    document.body.innerHTML =
+      '<button aria-label="Mikrofon deaktivieren"></button>';
+    expect(script.getMuteState()).toBe(false);
+  });
+
+  test("returns true when aria-label is 'Mikrofon aktivieren' (German, mic is muted)", () => {
+    document.body.innerHTML =
+      '<button aria-label="Mikrofon aktivieren"></button>';
+    expect(script.getMuteState()).toBe(true);
   });
 
   test("returns null when button exists but has no recognizable state signal", () => {
@@ -399,14 +427,16 @@ describe("toggleMute", () => {
     try {
       document.body.innerHTML = '<button data-is-muted="false"></button>';
       await Promise.resolve();
+      jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
+      const btn = document.querySelector("[data-is-muted]");
 
       const pending = script.toggleMute();
-      const querySpy = jest.spyOn(document, "querySelector").mockImplementation(() => {
+      const readSpy = jest.spyOn(btn, "hasAttribute").mockImplementation(() => {
         throw new Error("detached");
       });
       jest.advanceTimersByTime(script.MIC_STATE_CHANGE_TIMEOUT_MS);
       const result = await pending;
-      querySpy.mockRestore();
+      readSpy.mockRestore();
       const next = script.toggleMute();
       jest.advanceTimersByTime(script.MIC_STATE_CHANGE_TIMEOUT_MS);
 
@@ -422,13 +452,18 @@ describe("toggleMute", () => {
     try {
       document.body.innerHTML = '<button data-is-muted="false"></button>';
       await Promise.resolve();
+      jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
+      const btn = document.querySelector("[data-is-muted]");
 
       const pending = script.toggleMute();
-      const querySpy = jest.spyOn(document, "querySelector").mockImplementation(() => {
+      const readSpy = jest.spyOn(btn, "hasAttribute").mockImplementation(() => {
         throw new Error("detached");
       });
-      observerStub.instances[0].callback();
-      querySpy.mockRestore();
+      try {
+        observerStub.instances[0].callback();
+      } finally {
+        readSpy.mockRestore();
+      }
       const result = await pending;
 
       expect(result).toEqual(expect.objectContaining({ ok: false, reason: "exception", error: "detached" }));
@@ -530,6 +565,14 @@ describe("message listener", () => {
 // startObserving
 // ---------------------------------------------------------------------------
 describe("startObserving", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   test("calls observer.observe on document.body with correct options", () => {
     const observer = script._getObserver();
     const observeSpy = jest.spyOn(observer, "observe");
@@ -571,8 +614,9 @@ describe("startObserving", () => {
     // Simulate Meet toggling the DOM attribute
     btn.setAttribute("data-is-muted", "true");
 
-    // jsdom fires MutationObserver callbacks in a microtask
+    // jsdom fires MutationObserver callbacks in a microtask; the report is batched after that.
     await Promise.resolve();
+    jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
 
     expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({
       type: "state_update",
@@ -590,6 +634,7 @@ describe("startObserving", () => {
     // Set the same value — state has not changed
     btn.setAttribute("data-is-muted", "false");
     await Promise.resolve();
+    jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
 
     expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
   });
@@ -853,22 +898,180 @@ describe("message listener — camera", () => {
 // Re-injection guard
 // ---------------------------------------------------------------------------
 describe("re-injection guard (window.__macMuteLoaded)", () => {
-  test("window.__macMuteLoaded is true after first load", () => {
-    expect(window.__macMuteLoaded).toBe(true);
+  let loadedMarker;
+
+  beforeEach(() => {
+    loadedMarker = window.__macMuteLoaded;
   });
 
-  test("re-requiring with guard set does not re-register chrome listeners", () => {
-    const callsBefore =
-      chrome.runtime.onMessage.addListener.mock.calls.length;
+  afterEach(() => {
+    chrome.runtime.id = "macmute-test";
+    try {
+      if (window.__macMuteLoaded !== loadedMarker) window.__macMuteLoaded?.teardown?.();
+    } finally {
+      window.__macMuteLoaded = loadedMarker;
+    }
+    jest.useRealTimers();
+  });
 
-    // Simulate a second injection: clear module cache but keep the guard
-    jest.resetModules();
-    // Do NOT delete window.__macMuteLoaded — the guard should prevent execution
-    require("../../chrome-extension/content-script");
+  const orphan = () => ({ isAlive: () => false, teardown: () => {} });
 
-    const callsAfter =
-      chrome.runtime.onMessage.addListener.mock.calls.length;
-    expect(callsAfter).toBe(callsBefore);
+  function loadFreshInstance() {
+    let instance;
+    jest.isolateModules(() => {
+      instance = require("../../chrome-extension/content-script");
+    });
+    return { instance, marker: window.__macMuteLoaded };
+  }
+
+  function injectAgain() {
+    return loadFreshInstance().marker;
+  }
+
+  // The suite's own instance would also report DOM changes, hiding what the fresh one does.
+  function withSharedObserverPaused(run) {
+    script._getObserver().disconnect();
+    return Promise.resolve()
+      .then(run)
+      .finally(() => script.startObserving());
+  }
+
+  test("teardown leaves nothing that reports to the extension", () =>
+    withSharedObserverPaused(async () => {
+      jest.useFakeTimers();
+      window.__macMuteLoaded = orphan();
+      document.body.innerHTML = '<button data-is-muted="false"></button>';
+      const { marker } = loadFreshInstance();
+      const btn = document.querySelector("[data-is-muted]");
+      btn.setAttribute("data-is-muted", "true");
+      await Promise.resolve();
+      chrome.runtime.sendMessage.mockClear();
+
+      marker.teardown();
+      jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
+      window.dispatchEvent(
+        new MessageEvent("message", { data: { type: "macmute:media-session", kind: "mic", active: true }, source: window })
+      );
+      document.dispatchEvent(new Event("visibilitychange"));
+      btn.setAttribute("data-is-muted", "false");
+      await Promise.resolve();
+      jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
+
+      expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
+    }));
+
+  test("teardown ends a toggle in progress", async () => {
+    window.__macMuteLoaded = orphan();
+    document.body.innerHTML = '<button data-is-muted="false"></button>';
+    const { instance, marker } = loadFreshInstance();
+
+    const pending = instance.toggleMute();
+    marker.teardown();
+
+    expect(await pending).toEqual(expect.objectContaining({ ok: false, reason: "torn_down" }));
+  });
+
+  test("an instance whose extension context died tears itself down at its next report", () =>
+    withSharedObserverPaused(async () => {
+      jest.useFakeTimers();
+      window.__macMuteLoaded = orphan();
+      document.body.innerHTML = '<button data-is-muted="false"></button>';
+      loadFreshInstance();
+      const messageHandler = chrome.runtime.onMessage.addListener.mock.calls[0][0];
+      chrome.runtime.sendMessage.mockClear();
+
+      delete chrome.runtime.id;
+      document.querySelector("[data-is-muted]").setAttribute("data-is-muted", "true");
+      await Promise.resolve();
+      jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
+
+      expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
+      expect(chrome.runtime.onMessage.removeListener).toHaveBeenCalledWith(messageHandler);
+    }));
+
+  test("a new injection still starts when tearing down the old instance fails", () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    window.__macMuteLoaded = {
+      isAlive: () => false,
+      teardown: () => {
+        throw new Error("Extension context invalidated.");
+      },
+    };
+
+    injectAgain();
+
+    expect(chrome.runtime.onMessage.addListener).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  test("the loaded instance reports itself alive while its extension context is valid", () => {
+    expect(window.__macMuteLoaded.isAlive()).toBe(true);
+  });
+
+  test("the loaded instance reports itself dead once its extension context is invalidated", () => {
+    delete chrome.runtime.id;
+
+    expect(window.__macMuteLoaded.isAlive()).toBe(false);
+  });
+
+  test("a new injection stays out while the loaded instance is alive", () => {
+    const alive = { isAlive: () => true, teardown: jest.fn() };
+    window.__macMuteLoaded = alive;
+
+    injectAgain();
+
+    expect(chrome.runtime.onMessage.addListener).not.toHaveBeenCalled();
+    expect(alive.teardown).not.toHaveBeenCalled();
+    expect(window.__macMuteLoaded).toBe(alive);
+  });
+
+  test("a new injection tears down an orphaned instance and takes its place", () => {
+    const orphan = { isAlive: () => false, teardown: jest.fn() };
+    window.__macMuteLoaded = orphan;
+
+    const replacement = injectAgain();
+    replacement.teardown();
+
+    expect(orphan.teardown).toHaveBeenCalledTimes(1);
+    expect(chrome.runtime.onMessage.addListener).toHaveBeenCalledTimes(1);
+    expect(replacement).not.toBe(orphan);
+  });
+
+  test("a new injection takes the place of a marker left by an older version", () => {
+    window.__macMuteLoaded = true;
+
+    const replacement = injectAgain();
+    replacement.teardown();
+
+    expect(chrome.runtime.onMessage.addListener).toHaveBeenCalledTimes(1);
+  });
+
+  test("teardown stops observing the page and listening for messages", () => {
+    window.__macMuteLoaded = { isAlive: () => false, teardown: () => {} };
+    const observerStub = stubMutationObserver();
+    let instance;
+    try {
+      instance = injectAgain();
+    } finally {
+      observerStub.restore();
+    }
+    const messageHandler = chrome.runtime.onMessage.addListener.mock.calls[0][0];
+
+    instance.teardown();
+
+    expect(observerStub.instances[0].disconnect).toHaveBeenCalled();
+    expect(chrome.runtime.onMessage.removeListener).toHaveBeenCalledWith(messageHandler);
+  });
+
+  test("teardown still completes when the extension API is gone", () => {
+    window.__macMuteLoaded = { isAlive: () => false, teardown: () => {} };
+    const instance = injectAgain();
+    chrome.runtime.onMessage.removeListener.mockImplementationOnce(() => {
+      throw new Error("Extension context invalidated.");
+    });
+
+    expect(() => instance.teardown()).not.toThrow();
   });
 });
 
@@ -1082,8 +1285,13 @@ describe("DOM updates while the page is hidden", () => {
     window.dispatchEvent(new MessageEvent("message", { data, source: window }));
   }
 
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
   afterEach(() => {
     setVisibility("visible");
+    jest.useRealTimers();
   });
 
   test("does not report a stale DOM state that contradicts the media session while hidden", async () => {
@@ -1092,6 +1300,7 @@ describe("DOM updates while the page is hidden", () => {
 
     document.body.innerHTML = '<button data-is-muted="false"></button>';
     await Promise.resolve();
+    jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
 
     expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
   });
@@ -1104,6 +1313,7 @@ describe("DOM updates while the page is hidden", () => {
 
     document.body.innerHTML = '<button data-is-muted="false"></button>';
     await Promise.resolve();
+    jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
 
     expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: "state_update", muted: false });
   });
@@ -1114,6 +1324,7 @@ describe("DOM updates while the page is hidden", () => {
 
     document.body.innerHTML = '<button data-is-muted="true"></button>';
     await Promise.resolve();
+    jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
 
     expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: "state_update", muted: true });
   });
@@ -1264,5 +1475,157 @@ describe("state queries while the page is hidden", () => {
     messageListener({ type: "get_state" }, {}, jest.fn());
 
     expect(chrome.runtime.sendMessage).toHaveBeenLastCalledWith({ type: "state_update", muted: false });
+  });
+});
+
+describe("global state observer batching", () => {
+  const MIC_ON = '<button data-is-muted="false"></button>';
+  const CAMERA_ON = '<button aria-label="Turn off camera"></button>';
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  function stateUpdates() {
+    return chrome.runtime.sendMessage.mock.calls
+      .map(([message]) => message)
+      .filter((message) => message.type === "state_update");
+  }
+
+  async function flipMic(times, btn = document.querySelector("[data-is-muted]")) {
+    for (let i = 1; i <= times; i++) {
+      btn.setAttribute("data-is-muted", i % 2 === 1 ? "true" : "false");
+      await Promise.resolve();
+    }
+  }
+
+  test("sends a single update with the final state after a burst of changes", async () => {
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+    chrome.runtime.sendMessage.mockClear();
+
+    await flipMic(9);
+    jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
+
+    expect(stateUpdates()).toEqual([{ type: "state_update", muted: true }]);
+  });
+
+  test("sends nothing when a burst ends in the state already sent", async () => {
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+    chrome.runtime.sendMessage.mockClear();
+
+    await flipMic(10);
+    jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
+
+    expect(stateUpdates()).toEqual([]);
+  });
+
+  test("does not search the document again while the buttons stay in place", async () => {
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+    const btn = document.querySelector("[data-is-muted]");
+    const querySelector = jest.spyOn(document, "querySelector");
+
+    chrome.runtime.sendMessage.mockClear();
+
+    await flipMic(9, btn);
+    jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
+
+    expect(querySelector).not.toHaveBeenCalled();
+    expect(stateUpdates()).toEqual([{ type: "state_update", muted: true }]);
+    querySelector.mockRestore();
+  });
+
+  test("searches for missing buttons once per burst", async () => {
+    script.startObserving();
+    const querySelector = jest.spyOn(document, "querySelector");
+
+    for (let i = 0; i < 10; i++) {
+      document.body.appendChild(document.createElement("div"));
+      await Promise.resolve();
+    }
+    jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
+
+    const selectorCount = script.MUTE_BUTTON_SELECTORS.length + script.CAMERA_BUTTON_SELECTORS.length;
+    expect(querySelector).toHaveBeenCalledTimes(selectorCount);
+    querySelector.mockRestore();
+  });
+
+  test("finds and reports a button that replaced the cached one", async () => {
+    document.body.innerHTML = MIC_ON;
+    script.startObserving();
+    chrome.runtime.sendMessage.mockClear();
+
+    document.body.innerHTML = '<button data-is-muted="true"></button>';
+    await Promise.resolve();
+    jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
+
+    expect(stateUpdates()).toEqual([{ type: "state_update", muted: true }]);
+  });
+
+  test("reports the state of each burst", async () => {
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+    chrome.runtime.sendMessage.mockClear();
+
+    await flipMic(1);
+    jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
+    await flipMic(2);
+    jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
+
+    expect(stateUpdates()).toEqual([
+      { type: "state_update", muted: true },
+      { type: "state_update", muted: false },
+    ]);
+  });
+
+  test("reports a camera change seen by the observer", async () => {
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+    chrome.runtime.sendMessage.mockClear();
+
+    document.querySelector('[aria-label="Turn off camera"]').setAttribute("aria-label", "Turn on camera");
+    await Promise.resolve();
+    jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
+
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: "camera_state_update", active: false });
+  });
+
+  test("reports during a long stream of mutations instead of waiting for it to stop", async () => {
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+    chrome.runtime.sendMessage.mockClear();
+
+    await flipMic(1);
+    for (let elapsed = 0; elapsed < 300; elapsed += 50) {
+      document.body.appendChild(document.createElement("div"));
+      await Promise.resolve();
+      jest.advanceTimersByTime(50);
+    }
+
+    expect(stateUpdates()).toEqual([{ type: "state_update", muted: true }]);
+  });
+
+  test("prefers a higher-priority button that appears after a lower-priority one was found", () => {
+    document.body.innerHTML = '<button aria-label="Turn off microphone"></button>';
+    expect(script.findMuteButton().getAttribute("aria-label")).toBe("Turn off microphone");
+
+    document.body.insertAdjacentHTML("beforeend", '<button data-is-muted="false"></button>');
+
+    expect(script.findMuteButton().hasAttribute("data-is-muted")).toBe(true);
+  });
+
+  test("searches again when the cached button no longer matches its selector", () => {
+    document.body.innerHTML = '<button aria-label="Turn off camera"></button>';
+    const button = script.findCameraButton();
+
+    button.setAttribute("aria-label", "Settings");
+
+    expect(script.findCameraButton()).toBeNull();
   });
 });
