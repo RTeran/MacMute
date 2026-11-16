@@ -46,6 +46,29 @@ final class SocketServerTests: XCTestCase {
         XCTAssertEqual(readLine(from: second), #"{"type":"pong"}"#)
     }
 
+    func testDisconnectsAHelperThatSendsALineLongerThanTheLimit() {
+        let helper = connectHelper()
+        var noSigPipe: Int32 = 1
+        setsockopt(helper, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+
+        let oversized = [UInt8](repeating: UInt8(ascii: "a"), count: LineFramer.defaultMaxLineLength + 1)
+        _ = oversized.withUnsafeBytes { Darwin.write(helper, $0.baseAddress, $0.count) }
+
+        XCTAssertTrue(waitForEndOfStream(on: helper))
+        waitUntilNoHelperIsConnected()
+    }
+
+    private func waitForEndOfStream(on fd: Int32) -> Bool {
+        let deadline = Date().addingTimeInterval(2)
+        var buffer = [UInt8](repeating: 0, count: 1024)
+        while Date() < deadline {
+            let count = read(fd, &buffer, buffer.count)
+            if count == 0 { return true }
+            if count < 0 && errno != EAGAIN && errno != EINTR { return true }
+        }
+        return false
+    }
+
     private func connectHelper(file: StaticString = #filePath, line: UInt = #line) -> Int32 {
         let connected = expectation(description: "helper connected")
         connections.append(connected)

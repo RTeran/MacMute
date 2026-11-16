@@ -185,7 +185,7 @@ class SocketServer {
     private func startReading() {
         let client = clientSocket
         let source = DispatchSource.makeReadSource(fileDescriptor: client, queue: queue)
-        var buffer = Data()
+        var framer = LineFramer()
 
         source.setEventHandler { [weak self, unowned source] in
             guard let self = self else { return }
@@ -195,21 +195,20 @@ class SocketServer {
             if bytesRead <= 0 {
                 let cause = bytesRead < 0 ? String(cString: strerror(errno)) : "end of stream"
                 self.logger.notice("Helper disconnected (\(cause, privacy: .public))")
-                source.cancel()
-                if self.clientSocket == client {
-                    self.clientSocket = -1
-                    self.readSource = nil
-                }
+                self.dropClient(client, source: source)
                 return
             }
 
-            buffer.append(contentsOf: readBuffer[0..<bytesRead])
+            let lines: [Data]
+            do {
+                lines = try framer.append(Data(readBuffer[0..<bytesRead]))
+            } catch {
+                self.logger.error("Disconnecting helper: line longer than \(framer.maxLineLength, privacy: .public) bytes")
+                self.dropClient(client, source: source)
+                return
+            }
 
-            // Process newline-delimited messages
-            while let newlineIndex = buffer.firstIndex(of: 0x0A) {
-                let messageData = buffer[buffer.startIndex..<newlineIndex]
-                buffer = Data(buffer[buffer.index(after: newlineIndex)...])
-
+            for messageData in lines {
                 guard let json = try? JSONSerialization.jsonObject(with: messageData) as? [String: Any] else {
                     self.logger.error("Dropping undecodable message from helper: \(String(decoding: messageData, as: UTF8.self), privacy: .public)")
                     continue
@@ -226,5 +225,13 @@ class SocketServer {
 
         source.resume()
         self.readSource = source
+    }
+
+    private func dropClient(_ client: Int32, source: DispatchSourceRead) {
+        source.cancel()
+        if clientSocket == client {
+            clientSocket = -1
+            readSource = nil
+        }
     }
 }
