@@ -65,8 +65,22 @@ require_embedded_pins() {
     echo "error: the Info.plist of $1 does not pin $3" >&2
     exit 1
   fi
-  if ! launchctl plist __TEXT,__info_plist "$2" 2>/dev/null | grep -qxF "	\"MacMuteLeafPin\" = \"$3\";"; then
-    echo "error: the embedded Info.plist of $2 does not pin $3" >&2
+  # launchctl reads only the first slice of a universal binary.
+  local slices arch archs pinned=1
+  archs="$(lipo -archs "$2" 2>/dev/null)" || archs=""
+  slices="$(mktemp -d)"
+  [[ -n "$archs" ]] || pinned=0
+  for arch in $archs; do
+    if ! lipo -thin "$arch" "$2" -output "$slices/$arch" 2>/dev/null &&
+       ! { [[ "$archs" == "$arch" ]] && cp "$2" "$slices/$arch"; }; then
+      pinned=0
+    elif ! launchctl plist __TEXT,__info_plist "$slices/$arch" 2>/dev/null | grep -qxF "	\"MacMuteLeafPin\" = \"$3\";"; then
+      pinned=0
+    fi
+  done
+  rm -rf "$slices"
+  if (( pinned == 0 )); then
+    echo "error: the embedded Info.plist of $2 does not pin $3 in every architecture" >&2
     exit 1
   fi
 }
