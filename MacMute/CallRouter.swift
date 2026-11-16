@@ -9,6 +9,8 @@ struct CallRouter {
         var muted: Bool?
         var cameraOff: Bool?
         var inCall = false
+
+        var hasKnownState: Bool { muted != nil || cameraOff != nil }
     }
 
     private struct Entry {
@@ -27,8 +29,10 @@ struct CallRouter {
         if let latestJoin = inCall.max(by: { $0.value.joinedCallAt < $1.value.joinedCallAt }) {
             return latestJoin.key
         }
+        // Without activity, a helper that reported any state has a Meet tab; a newer one without state may not.
         return entries.max { lhs, rhs in
-            (lhs.value.lastActivity, lhs.value.connectedAt) < (rhs.value.lastActivity, rhs.value.connectedAt)
+            (lhs.value.lastActivity, lhs.value.profile.hasKnownState ? 1 : 0, lhs.value.connectedAt)
+                < (rhs.value.lastActivity, rhs.value.profile.hasKnownState ? 1 : 0, rhs.value.connectedAt)
         }?.key
     }
 

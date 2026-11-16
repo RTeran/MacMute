@@ -44,9 +44,30 @@ final class CallRouterTests: XCTestCase {
 
     func testTheFirstReportedStateIsNotActivity() {
         router.connect(1)
+        router.recordState(.mic, true, from: 1)
+        router.recordState(.mic, false, from: 1)
         router.connect(2)
 
-        router.recordState(.camera, true, from: 1)
+        router.recordState(.camera, true, from: 2)
+
+        XCTAssertEqual(router.selected, 1)
+    }
+
+    func testPrefersAHelperWithAKnownStateWhileNoneHasActivity() {
+        router.connect(1)
+        router.recordState(.mic, false, from: 1)
+
+        router.connect(2)
+
+        XCTAssertEqual(router.selected, 1)
+    }
+
+    func testAmongHelpersWithAKnownStateAndNoActivityPrefersTheNewest() {
+        router.connect(1)
+        router.recordState(.mic, false, from: 1)
+        router.connect(2)
+
+        router.recordState(.camera, true, from: 2)
 
         XCTAssertEqual(router.selected, 2)
     }
