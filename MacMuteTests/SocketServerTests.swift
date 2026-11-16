@@ -13,6 +13,7 @@ final class SocketServerTests: XCTestCase {
     private var messageArrived: XCTestExpectation?
     private var states: [SocketServerState] = []
     private var awaitedState: (state: SocketServerState, arrived: XCTestExpectation)?
+    private var serverGeneration = 0
 
     override func setUp() {
         super.setUp()
@@ -45,8 +46,12 @@ final class SocketServerTests: XCTestCase {
             retryBackoff: RetryBackoff(first: 0.02, maximum: 0.05),
             makeVerifyPeer: makeVerifyPeer
         )
+        // Reports of a stopped server can still be queued on main; they must not count for this one.
+        serverGeneration += 1
+        states = []
+        let generation = serverGeneration
         server.onStateChange = { [weak self] state in
-            guard let self else { return }
+            guard let self, generation == self.serverGeneration else { return }
             self.states.append(state)
             if let awaited = self.awaitedState, awaited.state == state {
                 self.awaitedState = nil
