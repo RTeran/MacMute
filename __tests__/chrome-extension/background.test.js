@@ -520,6 +520,62 @@ describe("call status", () => {
       expect(posted()).toEqual(CALL_ENDED);
     });
 
+    function deferTabAnswers() {
+      const pending = [];
+      chrome.tabs.sendMessage.mockImplementation(
+        () => new Promise((resolve) => pending.push(resolve))
+      );
+      return pending;
+    }
+
+    function completeLoad(tabId) {
+      tabUpdated(tabId, { status: "loading" }, { id: tabId, url: MEET_TAB_URL, status: "loading" });
+      tabUpdated(tabId, { status: "complete" }, { id: tabId, url: MEET_TAB_URL, status: "complete" });
+    }
+
+    test.each([
+      ["sends call_left", () => contentScriptSends({ type: "call_left" }, fromTab(1))],
+      ["is closed", () => chrome.tabs.onRemoved.addListener.mock.calls[0][0](1, {})],
+    ])("ignores a late answer from a tab that %s while it was asked", async (_case, leave) => {
+      const answers = deferTabAnswers();
+      completeLoad(1);
+
+      leave();
+      answers[0]({ inCall: true });
+      await flush();
+
+      expect(posted()).toEqual(CALL_ENDED);
+    });
+
+    test("ignores an older answer that arrives after a newer one took the tab out", async () => {
+      const answers = deferTabAnswers();
+      completeLoad(1);
+      completeLoad(1);
+
+      answers[1]({ inCall: false });
+      await flush();
+      answers[0]({ inCall: true });
+      await flush();
+
+      expect(posted()).toEqual(CALL_ENDED);
+    });
+
+    test("injects the content script into a reloaded tab that has none yet", async () => {
+      chrome.tabs.sendMessage
+        .mockImplementationOnce(() =>
+          Promise.reject(new Error("Could not establish connection. Receiving end does not exist."))
+        )
+        .mockImplementationOnce(() => Promise.resolve({ inCall: false }));
+
+      completeLoad(1);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+
+      expect(chrome.scripting.executeScript).toHaveBeenCalledWith(
+        expect.objectContaining({ target: { tabId: 1 }, files: ["content-script.js"] })
+      );
+      expect(posted()).toEqual(CALL_ENDED);
+    });
+
     test("does nothing while the tab is still loading", async () => {
       tabUpdated(1, { status: "loading" }, { id: 1, url: MEET_TAB_URL, status: "loading" });
       await flush();

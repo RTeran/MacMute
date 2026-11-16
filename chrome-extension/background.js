@@ -244,9 +244,11 @@ async function recheckTabInCall(tabId) {
   try {
     response = await sendToTab(tabId, { type: "get_state" });
   } catch (error) {
-    console.warn(`MacMute: Could not reach tab ${tabId}:`, error.message);
+    console.warn(`MacMute: Could not reach tab ${tabId}:`, error);
     return;
   }
+  // The tab may have left while it was asked; a tab that really rejoins sends its own state update.
+  if (!tabsInCall.has(tabId)) return;
   const inCall = inCallFromAnswer(tabId, true, response);
   if (inCall !== undefined) setTabInCall(tabId, inCall);
 }
@@ -307,7 +309,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.discarded || !tab?.url?.startsWith(MEET_URL_PREFIX)) {
     setTabInCall(tabId, false);
   } else if (changeInfo.status === "complete") {
-    recheckTabInCall(tabId);
+    recheckTabInCall(tabId).catch((error) => {
+      console.warn(`MacMute: Could not check whether tab ${tabId} is still in the call`, error);
+    });
   }
 });
 
