@@ -22,10 +22,11 @@ struct ShortcutConfigView: View {
                 label: muteStateManager.isCameraOff ? "Camera Off" : "Camera Active"
             )
 
-            if !muteStateManager.isConnectedToChrome {
-                Label("No connection with Chrome", systemImage: "exclamationmark.triangle.fill")
+            if let message = muteStateManager.chromeConnectionStatus.message {
+                Label(message, systemImage: "exclamationmark.triangle.fill")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Divider()

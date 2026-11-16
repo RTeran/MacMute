@@ -16,6 +16,16 @@ class MuteStateManager: ObservableObject {
     @Published var isMuted: Bool = false
     @Published var isCameraOff: Bool = false
     @Published private(set) var isConnectedToChrome = false
+    @Published private(set) var socketServerState: SocketServerState?
+    @Published var nativeMessagingHostInstallFailed = false
+
+    var chromeConnectionStatus: ChromeConnectionStatus {
+        ChromeConnectionStatus(
+            serverState: socketServerState,
+            isConnected: isConnectedToChrome,
+            nativeHostInstallFailed: nativeMessagingHostInstallFailed
+        )
+    }
 
     /// Called on main when another MacMute already owns the socket.
     var onAnotherInstanceRunning: (() -> Void)?
@@ -82,10 +92,11 @@ class MuteStateManager: ObservableObject {
             self?.coordinator.handle(message, from: helper)
         }
         socketServer.onStateChange = { [weak self] state in
-            switch state {
-            case .listening: self?.onSocketServerListening?()
-            case .anotherInstanceRunning: self?.onAnotherInstanceRunning?()
-            case .retrying, .failed: break
+            self?.socketServerState = state
+            switch SocketServerReaction(state) {
+            case .installNativeMessagingHost: self?.onSocketServerListening?()
+            case .quit: self?.onAnotherInstanceRunning?()
+            case .none: break
             }
         }
         socketServer.start()
