@@ -19,6 +19,12 @@ func errorCode(_ error: Error) -> String {
     return "\(nsError.domain) \(nsError.code)\(underlying)"
 }
 
+/// The parser's debug description names where the input went wrong without quoting it.
+func jsonErrorDescription(_ error: Error) -> String {
+    let nsError = error as NSError
+    return nsError.userInfo[NSDebugDescriptionErrorKey] as? String ?? "\(nsError.domain) \(nsError.code)"
+}
+
 /// Describes a peer message by its keys and value types. Only `type` and `target` show their value.
 func preview(_ message: [String: Any]) -> String {
     let fields = message.keys.sorted().map { key -> String in

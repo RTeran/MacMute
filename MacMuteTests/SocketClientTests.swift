@@ -28,14 +28,14 @@ final class SocketClientTests: XCTestCase {
 
     func testRelaysMessagesFromTheApp() {
         startServer()
-        let connected = expectHelper()
-        client.start()
-        wait(for: [connected], timeout: 2)
         let received = expectation(description: "message from the app")
         client.onMessageReceived = { message in
             XCTAssertEqual(message["type"] as? String, "get_state")
             received.fulfill()
         }
+        let connected = expectHelper()
+        client.start()
+        wait(for: [connected], timeout: 2)
 
         server?.sendMessage(["type": "get_state"], to: helperIDs[0])
 
@@ -88,8 +88,125 @@ final class SocketClientTests: XCTestCase {
 
         let firstDelay = expectState(.waiting(retryIn: 0.02))
         server?.stop()
-
         wait(for: [firstDelay], timeout: 2)
+        let reconnected = expectState(.connected)
+        server?.start()
+
+        wait(for: [reconnected], timeout: 2)
+    }
+
+    func testStopsWhenTheSocketPathIsTooLong() {
+        socketPath = socketDirectory.appendingPathComponent(String(repeating: "d", count: 60)).appendingPathComponent(String(repeating: "s", count: 60)).path
+        client = makeClient()
+        let stopped = expectState(.stopped(.socketPathTooLong))
+
+        client.start()
+
+        wait(for: [stopped], timeout: 2)
+        assertStaysStopped(.socketPathTooLong)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: socketDirectory.path))
+    }
+
+    // The reply is queued from the client's own queue, so it is written before the client reads the
+    // end of stream; without SO_NOSIGPIPE that write would kill the test process.
+    func testSurvivesWritingToAnAppThatJustQuit() throws {
+        let app = try FakeApp(path: socketPath)
+        let connected = expectState(.connected)
+        client.start()
+        let connection = try app.acceptConnection()
+        wait(for: [connected], timeout: 2)
+        client.onMessageReceived = { [client] _ in
+            app.close(connection)
+            usleep(20_000)
+            for _ in 0..<5 { client?.sendMessage(["type": "state_update"]) }
+        }
+        let retry = expectState(.waiting(retryIn: 0.02))
+
+        app.write(#"{"type":"get_state"}"# + "\n", to: connection)
+
+        wait(for: [retry], timeout: 2)
+    }
+
+    func testSplitsTwoMessagesThatArriveInOneWrite() throws {
+        let app = try FakeApp(path: socketPath)
+        var types: [String] = []
+        let received = expectation(description: "two messages")
+        received.expectedFulfillmentCount = 2
+        client.onMessageReceived = { message in
+            DispatchQueue.main.async { types.append(message["type"] as? String ?? "") }
+            received.fulfill()
+        }
+        client.start()
+        let connection = try app.acceptConnection()
+
+        app.write(#"{"type":"a"}"# + "\n" + #"{"type":"b"}"# + "\n", to: connection)
+
+        wait(for: [received], timeout: 2)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(types, ["a", "b"])
+    }
+
+    func testJoinsAMessageThatArrivesInTwoWrites() throws {
+        let app = try FakeApp(path: socketPath)
+        let received = expectation(description: "joined message")
+        client.onMessageReceived = { message in
+            XCTAssertEqual(message["type"] as? String, "joined")
+            received.fulfill()
+        }
+        client.start()
+        let connection = try app.acceptConnection()
+
+        app.write(#"{"type":"jo"#, to: connection)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        app.write(#"ined"}"# + "\n", to: connection)
+
+        wait(for: [received], timeout: 2)
+    }
+
+    func testDropsALineThatIsNotJSONAndStaysConnected() throws {
+        let app = try FakeApp(path: socketPath)
+        let received = expectation(description: "message after the bad line")
+        client.onMessageReceived = { message in
+            XCTAssertEqual(message["type"] as? String, "good")
+            received.fulfill()
+        }
+        let connected = expectState(.connected)
+        client.start()
+        let connection = try app.acceptConnection()
+        wait(for: [connected], timeout: 2)
+
+        app.write("not json\n" + #"{"type":"good"}"# + "\n", to: connection)
+
+        wait(for: [received], timeout: 2)
+        XCTAssertEqual(states.last, .connected)
+    }
+
+    func testStartingTwiceOpensOneConnection() {
+        startServer()
+        let connected = expectHelper()
+
+        client.start()
+        client.start()
+
+        wait(for: [connected], timeout: 2)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertEqual(helperIDs.count, 1)
+    }
+
+    func testStopClosesALiveConnectionWithoutRetrying() {
+        startServer()
+        let connected = expectState(.connected)
+        let helperAccepted = expectHelper()
+        client.start()
+        wait(for: [connected, helperAccepted], timeout: 2)
+        let disconnected = expectation(description: "app sees the helper leave")
+        server?.onClientDisconnected = { _ in disconnected.fulfill() }
+
+        client.stop()
+
+        wait(for: [disconnected], timeout: 2)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertEqual(states.last, .connected)
     }
 
     func testStopCancelsAPendingRetry() {
@@ -373,5 +490,51 @@ final class SocketClientTests: XCTestCase {
             if !awaitedStateRepeats { awaitedState = nil }
             awaited.arrived.fulfill()
         }
+    }
+}
+
+private final class FakeApp {
+    struct Failure: Error { let step: String; let code: Int32 }
+
+    private let listener: Int32
+    private var connections: [Int32] = []
+
+    init(path: String) throws {
+        try FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        listener = socket(AF_UNIX, SOCK_STREAM, 0)
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: Array(path.utf8)) }
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listener, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        }
+        guard bound == 0 else { throw Failure(step: "bind", code: errno) }
+        guard listen(listener, 4) == 0 else { throw Failure(step: "listen", code: errno) }
+    }
+
+    deinit {
+        connections.forEach { close($0) }
+        close(listener)
+    }
+
+    func acceptConnection() throws -> Int32 {
+        var ready = pollfd(fd: listener, events: Int16(POLLIN), revents: 0)
+        guard poll(&ready, 1, 2000) == 1 else { throw Failure(step: "poll", code: errno) }
+        let connection = accept(listener, nil, nil)
+        guard connection >= 0 else { throw Failure(step: "accept", code: errno) }
+        var noSigPipe: Int32 = 1
+        setsockopt(connection, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+        connections.append(connection)
+        return connection
+    }
+
+    func close(_ connection: Int32) {
+        connections.removeAll { $0 == connection }
+        Darwin.close(connection)
+    }
+
+    func write(_ text: String, to connection: Int32) {
+        let bytes = Array(text.utf8)
+        XCTAssertEqual(Darwin.write(connection, bytes, bytes.count), bytes.count)
     }
 }

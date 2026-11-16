@@ -2,10 +2,6 @@ import Foundation
 import Security
 import os
 
-enum HelperLog {
-    static let logger = Logger(subsystem: "com.macmute.app", category: "helper")
-}
-
 enum SocketClientState: Equatable {
     case connected
     case waiting(retryIn: TimeInterval)
@@ -15,6 +11,7 @@ enum SocketClientState: Equatable {
 
 enum SocketClientStopReason: Equatable {
     case rejectedByApp
+    case socketPathTooLong
     /// This helper's own signature or location leaves no app it could trust.
     case cannotVerifyApp(PeerVerificationError)
 }
@@ -138,10 +135,12 @@ final class SocketClient {
             }
             messageData.append(0x0A)
 
-            let (written, writeErrno) = writeFully(self.socketFD, messageData)
-            if written != messageData.count {
+            let fd = self.socketFD
+            let (written, writeErrno) = writeFully(fd, messageData)
+            // A partial line would glue itself to the next message, so the connection is unusable.
+            if written != messageData.count, let source = self.readSource {
                 let cause = writeErrno.map { String(cString: strerror($0)) } ?? "no buffer"
-                HelperLog.logger.error("Write to app failed (\(written, privacy: .public)/\(messageData.count, privacy: .public) bytes): \(cause, privacy: .public)")
+                self.disconnect(fd, source: source, reason: "write failed after \(written)/\(messageData.count) bytes: \(cause)", countsAsRejection: false)
             }
         }
     }
@@ -159,8 +158,8 @@ final class SocketClient {
             return scheduleRetry()
         }
         guard var address = Self.address(for: socketPath) else {
-            HelperLog.logger.fault("Socket path \(self.socketName, privacy: .public) does not fit in a socket address")
-            return
+            HelperLog.logger.fault("Socket path \(self.socketName, privacy: .public) does not fit in a socket address, giving up")
+            return finish(.socketPathTooLong)
         }
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else {
@@ -178,7 +177,9 @@ final class SocketClient {
             }
         }
         guard result == 0 else {
-            HelperLog.logger.info("Failed to connect to socket \(self.socketName, privacy: .public): \(String(cString: strerror(errno)), privacy: .public)")
+            let code = errno
+            let level: OSLogType = code == ENOENT || code == ECONNREFUSED ? .info : .error
+            HelperLog.logger.log(level: level, "Failed to connect to socket \(self.socketName, privacy: .public): \(String(cString: strerror(code)), privacy: .public)")
             close(fd)
             return scheduleRetry()
         }
@@ -217,11 +218,13 @@ final class SocketClient {
         source.setEventHandler { [weak self, unowned source] in
             guard let self else { return }
             var readBuffer = [UInt8](repeating: 0, count: 4096)
-            let bytesRead = read(fd, &readBuffer, readBuffer.count)
+            var bytesRead: Int
+            repeat { bytesRead = read(fd, &readBuffer, readBuffer.count) } while bytesRead < 0 && errno == EINTR
+            if bytesRead < 0, errno == EAGAIN { return }
 
             guard bytesRead > 0 else {
                 let cause = bytesRead < 0 ? String(cString: strerror(errno)) : "end of stream"
-                return self.disconnect(fd, source: source, reason: cause, receivedData: receivedData)
+                return self.disconnect(fd, source: source, reason: cause, countsAsRejection: !receivedData)
             }
             if !receivedData {
                 receivedData = true
@@ -232,14 +235,21 @@ final class SocketClient {
             do {
                 lines = try framer.append(Data(readBuffer[0..<bytesRead]))
             } catch {
-                return self.disconnect(fd, source: source, reason: "line over the \(self.maxLineLength) byte limit", receivedData: true)
+                return self.disconnect(fd, source: source, reason: "line over the \(self.maxLineLength) byte limit", countsAsRejection: false)
             }
             for line in lines {
-                guard let json = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
-                    HelperLog.logger.error("Dropping undecodable message from app: \(preview(String(decoding: line, as: UTF8.self)), privacy: .public)")
+                let object: Any
+                do {
+                    object = try JSONSerialization.jsonObject(with: line)
+                } catch {
+                    HelperLog.logger.error("Dropping a \(line.count, privacy: .public) byte line from the app that is not JSON: \(jsonErrorDescription(error), privacy: .public)")
                     continue
                 }
-                self.onMessageReceived?(json)
+                guard let message = object as? [String: Any] else {
+                    HelperLog.logger.error("Dropping a \(line.count, privacy: .public) byte line from the app that is not a JSON object")
+                    continue
+                }
+                self.onMessageReceived?(message)
             }
         }
 
@@ -253,14 +263,14 @@ final class SocketClient {
 
     // The app sends get_state to every helper it accepts, so a connection it closes before
     // sending anything means it rejected this helper; retrying forever would only fill both logs.
-    private func disconnect(_ fd: Int32, source: DispatchSourceRead, reason: String, receivedData: Bool) {
+    private func disconnect(_ fd: Int32, source: DispatchSourceRead, reason: String, countsAsRejection: Bool) {
         HelperLog.logger.notice("Disconnected from app (\(reason, privacy: .public))")
         source.cancel()
         guard socketFD == fd else { return }
         socketFD = -1
         readSource = nil
         guard isRunning else { return }
-        if !receivedData {
+        if countsAsRejection {
             connectionsWithoutData += 1
             if connectionsWithoutData >= maxConnectionsWithoutData {
                 HelperLog.logger.fault("The app closed \(self.connectionsWithoutData, privacy: .public) connections in a row before sending anything, so it rejects this helper; giving up")

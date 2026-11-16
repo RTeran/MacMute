@@ -53,7 +53,7 @@ struct NativeMessageReader {
         do {
             object = try JSONSerialization.jsonObject(with: body)
         } catch {
-            return .skipped("frame of \(length) bytes is not JSON: \(Self.parserMessage(error))")
+            return .skipped("frame of \(length) bytes is not JSON: \(jsonErrorDescription(error))")
         }
         guard let message = object as? [String: Any] else {
             return .skipped("frame of \(length) bytes is not a JSON object")
@@ -87,11 +87,5 @@ struct NativeMessageReader {
             }
         }
         return nil
-    }
-
-    // The debug description names the position of the problem without quoting the frame.
-    private static func parserMessage(_ error: Error) -> String {
-        let nsError = error as NSError
-        return nsError.userInfo[NSDebugDescriptionErrorKey] as? String ?? "\(nsError.domain) \(nsError.code)"
     }
 }

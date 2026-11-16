@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A1000111 /* HelperLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000098 /* HelperLog.swift */; };
+		A1000112 /* HelperLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000098 /* HelperLog.swift */; };
 		A1000107 /* SocketClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000097 /* SocketClientTests.swift */; };
 		A1000105 /* SocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000096 /* SocketClient.swift */; };
 		A1000106 /* SocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000096 /* SocketClient.swift */; };
@@ -90,6 +92,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A2000098 /* HelperLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelperLog.swift; sourceTree = "<group>"; };
 		A2000097 /* SocketClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocketClientTests.swift; sourceTree = "<group>"; };
 		A2000096 /* SocketClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocketClient.swift; sourceTree = "<group>"; };
 		A2000095 /* RetryBackoffTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RetryBackoffTests.swift; sourceTree = "<group>"; };
@@ -200,6 +203,7 @@
 			children = (
 				A2000020 /* main.swift */,
 				A2000096 /* SocketClient.swift */,
+				A2000098 /* HelperLog.swift */,
 				A2000092 /* NativeMessageReader.swift */,
 			);
 			path = MacMuteHelper;
@@ -363,6 +367,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1000020 /* main.swift in Sources */,
+				A1000111 /* HelperLog.swift in Sources */,
 				A1000110 /* PeerCodeVerifier.swift in Sources */,
 				A1000108 /* LineFramer.swift in Sources */,
 				A1000109 /* LogPreview.swift in Sources */,
@@ -399,6 +404,7 @@
 				A1000100 /* NativeMessageReaderTests.swift in Sources */,
 				A1000104 /* RetryBackoffTests.swift in Sources */,
 				A1000106 /* SocketClient.swift in Sources */,
+				A1000112 /* HelperLog.swift in Sources */,
 				A1000107 /* SocketClientTests.swift in Sources */,
 				A1000090 /* PeerCodeVerifier.swift in Sources */,
 				A1000091 /* PeerCodeVerifierTests.swift in Sources */,
