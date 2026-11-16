@@ -41,6 +41,7 @@
 		A1000058 /* UnconfirmedFeedbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000054 /* UnconfirmedFeedbackTests.swift */; };
 		A1000070 /* LineFramer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000070 /* LineFramer.swift */; };
 		A1000071 /* LineFramer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000070 /* LineFramer.swift */; };
+		A1000110 /* PeerCodeVerifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000086 /* PeerCodeVerifier.swift */; };
 		A1000108 /* LineFramer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000070 /* LineFramer.swift */; };
 		A1000109 /* LogPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000084 /* LogPreview.swift */; };
 		A1000072 /* LineFramerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000071 /* LineFramerTests.swift */; };
@@ -362,6 +363,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1000020 /* main.swift in Sources */,
+				A1000110 /* PeerCodeVerifier.swift in Sources */,
 				A1000108 /* LineFramer.swift in Sources */,
 				A1000109 /* LogPreview.swift in Sources */,
 				A1000105 /* SocketClient.swift in Sources */,

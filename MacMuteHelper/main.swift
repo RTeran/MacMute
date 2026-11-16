@@ -51,8 +51,14 @@ socketClient.onMessageReceived = { message in
 }
 
 socketClient.onStateChange = { state in
-    if case let .waiting(delay) = state {
+    switch state {
+    case .connected:
+        break
+    case let .waiting(delay):
         HelperLog.logger.info("Not connected to the app, retrying in \(delay, privacy: .public) s")
+    case .stopped:
+        // Chrome starts a new helper when the extension reconnects; this one can never connect.
+        exit(1)
     }
 }
 

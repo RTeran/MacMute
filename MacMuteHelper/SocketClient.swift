@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import os
 
 enum HelperLog {
@@ -8,6 +9,14 @@ enum HelperLog {
 enum SocketClientState: Equatable {
     case connected
     case waiting(retryIn: TimeInterval)
+    /// The client does not retry after this.
+    case stopped(SocketClientStopReason)
+}
+
+enum SocketClientStopReason: Equatable {
+    case rejectedByApp
+    /// This helper's own signature or location leaves no app it could trust.
+    case cannotVerifyApp(PeerVerificationError)
 }
 
 func writeFully(_ fd: Int32, _ data: Data) -> (written: Int, errno: Int32?) {
@@ -31,9 +40,16 @@ func writeFully(_ fd: Int32, _ data: Data) -> (written: Int, errno: Int32?) {
 final class SocketClient {
     static let defaultBackoff = RetryBackoff(first: 0.5, maximum: 10)
     static let defaultMaxLineLength = LineFramer.defaultMaxLineLength
+    static let defaultMaxConnectionsWithoutData = 3
+
+    typealias VerifyApp = (Int32) -> Result<Void, PeerVerificationError>
+    typealias MakeVerifyApp = () -> Result<VerifyApp, PeerVerificationError>
 
     private let socketPath: String
     private let maxLineLength: Int
+    private let maxConnectionsWithoutData: Int
+    private let makeVerifyApp: MakeVerifyApp
+    private var connectionsWithoutData = 0
     private let queue = DispatchQueue(label: "com.macmute.helper.socket")
     private var backoff: RetryBackoff
     private var socketFD: Int32 = -1
@@ -46,15 +62,40 @@ final class SocketClient {
     /// Called on the client's queue.
     var onStateChange: ((SocketClientState) -> Void)?
 
+    /// Only talks to the app that bundles this helper; see `PeerCodeVerifier.trustedAppRequirement`.
     convenience init() {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        self.init(socketPath: home.appendingPathComponent("Library/Application Support/MacMute/macmute.sock").path)
+        self.init(
+            socketPath: home.appendingPathComponent("Library/Application Support/MacMute/macmute.sock").path,
+            makeVerifyApp: Self.trustedAppCheck(ownCode: PeerCodeVerifier.ownStaticCode)
+        )
     }
 
-    init(socketPath: String, backoff: RetryBackoff = SocketClient.defaultBackoff, maxLineLength: Int = SocketClient.defaultMaxLineLength) {
+    /// `makeVerifyApp` runs before every connection attempt, so a rebuilt app is judged by its
+    /// signature on disk at that moment.
+    init(
+        socketPath: String,
+        makeVerifyApp: @escaping MakeVerifyApp,
+        backoff: RetryBackoff = SocketClient.defaultBackoff,
+        maxLineLength: Int = SocketClient.defaultMaxLineLength,
+        maxConnectionsWithoutData: Int = SocketClient.defaultMaxConnectionsWithoutData
+    ) {
         self.socketPath = socketPath
+        self.makeVerifyApp = makeVerifyApp
         self.backoff = backoff
         self.maxLineLength = maxLineLength
+        self.maxConnectionsWithoutData = maxConnectionsWithoutData
+    }
+
+    static func trustedAppCheck(ownCode: @escaping () -> Result<SecStaticCode, PeerVerificationError>) -> MakeVerifyApp {
+        {
+            ownCode().flatMap { helper -> Result<SecRequirement, PeerVerificationError> in
+                guard let path = PeerCodeVerifier.path(of: helper),
+                      let app = PeerCodeVerifier.containingApp(ofHelperAt: path) else { return .failure(.notInsideAnApp) }
+                return PeerCodeVerifier.trustedAppRequirement(signedLike: helper, appIdentifier: PeerCodeVerifier.appIdentifier, containingApp: app)
+            }
+            .map { requirement in { socket in PeerCodeVerifier.verify(socket: socket, against: requirement) } }
+        }
     }
 
     private var socketName: String { (socketPath as NSString).lastPathComponent }
@@ -63,6 +104,7 @@ final class SocketClient {
         queue.async { [weak self] in
             guard let self, !self.isRunning else { return }
             self.isRunning = true
+            self.connectionsWithoutData = 0
             self.connect()
         }
     }
@@ -105,6 +147,17 @@ final class SocketClient {
     }
 
     private func connect() {
+        let verifyApp: VerifyApp
+        switch makeVerifyApp() {
+        case let .success(verify):
+            verifyApp = verify
+        case let .failure(error) where Self.leavesNoAppToTrust(error):
+            HelperLog.logger.fault("Cannot verify the MacMute app, giving up: \(error.description, privacy: .public)")
+            return finish(.cannotVerifyApp(error))
+        case let .failure(error):
+            HelperLog.logger.error("Cannot verify the MacMute app yet: \(error.description, privacy: .public)")
+            return scheduleRetry()
+        }
         guard var address = Self.address(for: socketPath) else {
             HelperLog.logger.fault("Socket path \(self.socketName, privacy: .public) does not fit in a socket address")
             return
@@ -126,6 +179,13 @@ final class SocketClient {
         }
         guard result == 0 else {
             HelperLog.logger.info("Failed to connect to socket \(self.socketName, privacy: .public): \(String(cString: strerror(errno)), privacy: .public)")
+            close(fd)
+            return scheduleRetry()
+        }
+
+        if case let .failure(error) = verifyApp(fd) {
+            let pid = PeerCodeVerifier.peerProcessID(of: fd).map(String.init) ?? "unknown"
+            HelperLog.logger.error("Not talking to process \(pid, privacy: .public) at \(self.socketName, privacy: .public): \(error.description, privacy: .public)")
             close(fd)
             return scheduleRetry()
         }
@@ -152,6 +212,7 @@ final class SocketClient {
     private func startReading(_ fd: Int32) {
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         var framer = LineFramer(maxLineLength: maxLineLength)
+        var receivedData = false
 
         source.setEventHandler { [weak self, unowned source] in
             guard let self else { return }
@@ -160,14 +221,18 @@ final class SocketClient {
 
             guard bytesRead > 0 else {
                 let cause = bytesRead < 0 ? String(cString: strerror(errno)) : "end of stream"
-                return self.disconnect(fd, source: source, reason: cause)
+                return self.disconnect(fd, source: source, reason: cause, receivedData: receivedData)
+            }
+            if !receivedData {
+                receivedData = true
+                self.connectionsWithoutData = 0
             }
 
             let lines: [Data]
             do {
                 lines = try framer.append(Data(readBuffer[0..<bytesRead]))
             } catch {
-                return self.disconnect(fd, source: source, reason: "line over the \(self.maxLineLength) byte limit")
+                return self.disconnect(fd, source: source, reason: "line over the \(self.maxLineLength) byte limit", receivedData: true)
             }
             for line in lines {
                 guard let json = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
@@ -186,13 +251,37 @@ final class SocketClient {
         readSource = source
     }
 
-    private func disconnect(_ fd: Int32, source: DispatchSourceRead, reason: String) {
+    // The app sends get_state to every helper it accepts, so a connection it closes before
+    // sending anything means it rejected this helper; retrying forever would only fill both logs.
+    private func disconnect(_ fd: Int32, source: DispatchSourceRead, reason: String, receivedData: Bool) {
         HelperLog.logger.notice("Disconnected from app (\(reason, privacy: .public))")
         source.cancel()
         guard socketFD == fd else { return }
         socketFD = -1
         readSource = nil
-        if isRunning { scheduleRetry() }
+        guard isRunning else { return }
+        if !receivedData {
+            connectionsWithoutData += 1
+            if connectionsWithoutData >= maxConnectionsWithoutData {
+                HelperLog.logger.fault("The app closed \(self.connectionsWithoutData, privacy: .public) connections in a row before sending anything, so it rejects this helper; giving up")
+                return finish(.rejectedByApp)
+            }
+        }
+        scheduleRetry()
+    }
+
+    private func finish(_ reason: SocketClientStopReason) {
+        isRunning = false
+        pendingRetry?.cancel()
+        pendingRetry = nil
+        onStateChange?(.stopped(reason))
+    }
+
+    /// A missing app on disk can come back (an update or a rebuild); the other failures cannot
+    /// change while this helper process runs.
+    private static func leavesNoAppToTrust(_ error: PeerVerificationError) -> Bool {
+        if case .expectedCodeUnavailable = error { return false }
+        return true
     }
 
     private static func address(for path: String) -> sockaddr_un? {
