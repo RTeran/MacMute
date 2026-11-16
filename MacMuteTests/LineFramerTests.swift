@@ -46,6 +46,22 @@ final class LineFramerTests: XCTestCase {
         XCTAssertThrowsError(try framer.append(Data("de".utf8)))
     }
 
+    func testSkipsEmptyLines() throws {
+        var framer = LineFramer()
+
+        XCTAssertEqual(try framer.append(Data("\none\n\n\ntwo\n".utf8)), [Data("one".utf8), Data("two".utf8)])
+    }
+
+    func testReturnsManyLinesFromOneChunk() throws {
+        var framer = LineFramer()
+        let chunk = (1...1000).map { "line\($0)\n" }.joined()
+
+        let lines = try framer.append(Data(chunk.utf8))
+
+        XCTAssertEqual(lines.count, 1000)
+        XCTAssertEqual(lines.last, Data("line1000".utf8))
+    }
+
     func testDefaultLimitIs64KB() {
         XCTAssertEqual(LineFramer.defaultMaxLineLength, 64 * 1024)
     }

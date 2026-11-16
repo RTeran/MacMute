@@ -241,7 +241,9 @@ class SocketServer {
 
             for messageData in lines {
                 guard let json = try? JSONSerialization.jsonObject(with: messageData) as? [String: Any] else {
-                    self.logger.error("Dropping undecodable message from helper \(id, privacy: .public): \(String(decoding: messageData, as: UTF8.self), privacy: .public)")
+                    // The line comes from another process and can be 64 KB, so only its start is logged.
+                    let preview = String(decoding: messageData.prefix(128), as: UTF8.self)
+                    self.logger.error("Dropping undecodable message from helper \(id, privacy: .public) (\(messageData.count, privacy: .public) bytes): \(preview, privacy: .public)")
                     continue
                 }
                 DispatchQueue.main.async {
