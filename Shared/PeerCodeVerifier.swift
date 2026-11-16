@@ -17,6 +17,8 @@ enum PeerVerificationError: Error, Equatable, CustomStringConvertible {
     case ownPathUnavailable(OSStatus)
     case securityCallReturnedNothing(String)
     case ownSigningModeInconsistent
+    case leafPinMalformed
+    case ownLeafNotPinned
 
     var description: String {
         switch self {
@@ -49,6 +51,10 @@ enum PeerVerificationError: Error, Equatable, CustomStringConvertible {
             return "\(function) reported success but returned nothing usable"
         case .ownSigningModeInconsistent:
             return "this app's signature is ad-hoc and has a certificate, or is neither, so its trust branch is unknown"
+        case .leafPinMalformed:
+            return "the pinned certificate hash in Info.plist is not 40 lowercase hex characters"
+        case .ownLeafNotPinned:
+            return "this app is not signed by the pinned certificate, so it trusts no peer"
         }
     }
 }
@@ -71,6 +77,7 @@ struct OwnCode {
 struct SigningIdentity {
     let cdhash: Data
     let leaf: SecCertificate?
+    let infoPlist: [String: Any]?
 }
 
 /// Checks that the process at the other end of a Unix socket runs trusted code. The trusted
@@ -81,6 +88,8 @@ enum PeerCodeVerifier {
     static let helperIdentifier = "com.macmute.helper"
     /// Must match PRODUCT_BUNDLE_IDENTIFIER of the app target, which codesign uses as its identifier.
     static let appIdentifier = "com.macmute.app"
+    /// Set from MACMUTE_LEAF_PIN, which only scripts/release.sh fills in.
+    static let leafPinKey = "MacMuteLeafPin"
 
     static func ownCode() -> Result<OwnCode, PeerVerificationError> {
         var code: SecCode?
@@ -96,7 +105,10 @@ enum PeerCodeVerifier {
 
     /// Dynamic validation compares against the cdhash the kernel loaded, so an on-disk signature
     /// that was swapped, for example for an ad-hoc copy, fails here instead of choosing the branch.
-    static func ownCode(running code: SecCode, onDisk staticCode: SecStaticCode) -> Result<OwnCode, PeerVerificationError> {
+    static func ownCode(
+        running code: SecCode, onDisk staticCode: SecStaticCode,
+        pinReader: ([String: Any]?) -> Result<String?, PeerVerificationError> = leafPin(from:)
+    ) -> Result<OwnCode, PeerVerificationError> {
         signingIdentity(of: staticCode).flatMap { identity in
             let cdhash = identity.cdhash.map { String(format: "%02x", $0) }.joined()
             var requirement: SecRequirement?
@@ -105,8 +117,26 @@ enum PeerCodeVerifier {
             guard let requirement else { return .failure(.securityCallReturnedNothing("SecRequirementCreateWithString")) }
             let status = SecCodeCheckValidity(code, [], requirement)
             guard status == errSecSuccess else { return .failure(.ownSignatureInvalid(status)) }
-            return .success(OwnCode(staticCode: staticCode, leaf: identity.leaf))
+            return pinReader(identity.infoPlist)
+                .flatMap { leafPinCheck(pin: $0, leafHash: identity.leaf.map { sha1Hex(of: $0) }) }
+                .map { OwnCode(staticCode: staticCode, leaf: identity.leaf) }
         }
+    }
+
+    /// The Info.plist is sealed by the CodeDirectory, so the pin cannot be swapped like the CMS
+    /// certificate chain. A tampered Info.plist reads back as nothing, which must not mean "no pin".
+    static func leafPin(from infoPlist: [String: Any]?) -> Result<String?, PeerVerificationError> {
+        guard let pin = infoPlist?[leafPinKey] as? String else {
+            return .failure(.securityCallReturnedNothing(leafPinKey))
+        }
+        if pin.isEmpty { return .success(nil) }
+        let isLowercaseHex = pin.count == 40 && pin.allSatisfy { ("0"..."9").contains($0) || ("a"..."f").contains($0) }
+        return isLowercaseHex ? .success(pin) : .failure(.leafPinMalformed)
+    }
+
+    static func leafPinCheck(pin: String?, leafHash: String?) -> Result<Void, PeerVerificationError> {
+        guard let pin else { return .success(()) }
+        return leafHash == pin ? .success(()) : .failure(.ownLeafNotPinned)
     }
 
     static func signingIdentity(of staticCode: SecStaticCode) -> Result<SigningIdentity, PeerVerificationError> {
@@ -122,7 +152,7 @@ enum PeerCodeVerifier {
         let leaf = (info[kSecCodeInfoCertificates as String] as? [SecCertificate])?.first
         return signingFlags(from: info)
             .flatMap { signingModeCheck(staticFlags: $0, hasLeaf: leaf != nil) }
-            .map { SigningIdentity(cdhash: cdhash, leaf: leaf) }
+            .map { SigningIdentity(cdhash: cdhash, leaf: leaf, infoPlist: info[kSecCodeInfoPList as String] as? [String: Any]) }
     }
 
     /// These are the CodeDirectory flags, covered by the cdhash, unlike the live status flags.
@@ -185,10 +215,12 @@ enum PeerCodeVerifier {
         return certificateRequirement(identifier: identifier, leaf: leaf)
     }
 
+    private static func sha1Hex(of certificate: SecCertificate) -> String {
+        Insecure.SHA1.hash(data: SecCertificateCopyData(certificate) as Data).map { String(format: "%02x", $0) }.joined()
+    }
+
     private static func certificateRequirement(identifier: String, leaf: SecCertificate) -> Result<TrustedPeer, PeerVerificationError> {
-        let leafHash = Insecure.SHA1.hash(data: SecCertificateCopyData(leaf) as Data)
-            .map { String(format: "%02x", $0) }.joined()
-        let text = "identifier \"\(identifier)\" and certificate leaf = H\"\(leafHash)\""
+        let text = "identifier \"\(identifier)\" and certificate leaf = H\"\(sha1Hex(of: leaf))\""
         var requirement: SecRequirement?
         let created = SecRequirementCreateWithString(text as CFString, [], &requirement)
         guard created == errSecSuccess else { return .failure(.requirementUnbuildable(created)) }

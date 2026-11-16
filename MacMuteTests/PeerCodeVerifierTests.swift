@@ -130,7 +130,7 @@ final class PeerCodeVerifierTests: XCTestCase {
 
     func testReadsTheSignatureOfTheRunningCode() throws {
         var path: CFURL?
-        XCTAssertEqual(SecCodeCopyPath(try PeerCodeVerifier.ownCode().get().staticCode, [], &path), errSecSuccess)
+        XCTAssertEqual(SecCodeCopyPath(try runningOwnCodeWithoutPin().staticCode, [], &path), errSecSuccess)
 
         XCTAssertEqual(try XCTUnwrap(path) as URL, try ownCodeURL())
     }
@@ -314,9 +314,20 @@ final class PeerCodeVerifierTests: XCTestCase {
     }
 
     func testTheRunningCodeMatchesItsOwnSignatureOnDisk() throws {
-        let own = try PeerCodeVerifier.ownCode(running: try runningCode(), onDisk: try staticCode(at: try ownCodeURL())).get()
+        XCTAssertNil(try runningOwnCodeWithoutPin().leaf)
+    }
 
-        XCTAssertNil(own.leaf)
+    func testTheRunningAdHocCodeTrustsNothingWhenAPinIsSet() throws {
+        let result = PeerCodeVerifier.ownCode(
+            running: try runningCode(), onDisk: try staticCode(at: try ownCodeURL()), pinReader: { _ in .success(self.pinnedHash) }
+        )
+
+        XCTAssertEqual(result.failure, .ownLeafNotPinned)
+    }
+
+    // The test process is xctest, whose Info.plist has no pin key, unlike the app and the helper.
+    func testRunningCodeWithoutAPinKeyTrustsNothing() {
+        XCTAssertEqual(PeerCodeVerifier.ownCode().failure, .securityCallReturnedNothing(PeerCodeVerifier.leafPinKey))
     }
 
     func testReportsAPeerStatusThatCannotBeRead() throws {
@@ -387,7 +398,7 @@ final class PeerCodeVerifierTests: XCTestCase {
         _ = try adHocTestBundle()
 
         let trusted = try PeerCodeVerifier.trustedHelperRequirement(
-            signedLike: try PeerCodeVerifier.ownCode().get(), helperIdentifier: "com.macmute.helper", bundledHelper: try ownCodeURL()
+            signedLike: try runningOwnCodeWithoutPin(), helperIdentifier: "com.macmute.helper", bundledHelper: try ownCodeURL()
         ).get()
 
         XCTAssertFalse(trusted.requiresHardenedRuntime)
@@ -442,6 +453,51 @@ final class PeerCodeVerifierTests: XCTestCase {
         XCTAssertEqual(PeerCodeVerifier.signingFlags(from: information).failure, .securityCallReturnedNothing("kSecCodeInfoFlags"))
     }
 
+    func testAnEmptyPinKeepsBothTrustBranches() {
+        XCTAssertNoThrow(try PeerCodeVerifier.leafPinCheck(pin: nil, leafHash: nil).get())
+        XCTAssertNoThrow(try PeerCodeVerifier.leafPinCheck(pin: nil, leafHash: pinnedHash).get())
+    }
+
+    func testAcceptsALeafThatMatchesThePin() {
+        XCTAssertNoThrow(try PeerCodeVerifier.leafPinCheck(pin: pinnedHash, leafHash: pinnedHash).get())
+    }
+
+    func testRejectsALeafThatDoesNotMatchThePin() {
+        let other = String(repeating: "0", count: 40)
+
+        XCTAssertEqual(PeerCodeVerifier.leafPinCheck(pin: pinnedHash, leafHash: other).failure, .ownLeafNotPinned)
+    }
+
+    func testRejectsAnAdHocSignatureWhenAPinIsSet() {
+        XCTAssertEqual(PeerCodeVerifier.leafPinCheck(pin: pinnedHash, leafHash: nil).failure, .ownLeafNotPinned)
+    }
+
+    func testReadsAnEmptyPinAsNoPin() throws {
+        XCTAssertNil(try PeerCodeVerifier.leafPin(from: [PeerCodeVerifier.leafPinKey: ""]).get())
+    }
+
+    func testReadsTheHexPin() throws {
+        XCTAssertEqual(try PeerCodeVerifier.leafPin(from: [PeerCodeVerifier.leafPinKey: pinnedHash]).get(), pinnedHash)
+    }
+
+    func testRejectsAMalformedPin() {
+        for malformed in ["ea0ccfd73df5b789344b9dfcb73d985c8be24e2", "H\"\(pinnedHash)\"", pinnedHash.uppercased(), "zz" + pinnedHash.dropFirst(2)] {
+            XCTAssertEqual(PeerCodeVerifier.leafPin(from: [PeerCodeVerifier.leafPinKey: malformed]).failure, .leafPinMalformed, malformed)
+        }
+    }
+
+    func testRejectsAMissingPinKey() {
+        XCTAssertEqual(PeerCodeVerifier.leafPin(from: [:]).failure, .securityCallReturnedNothing(PeerCodeVerifier.leafPinKey))
+    }
+
+    func testRejectsAMissingInfoPlist() {
+        XCTAssertEqual(PeerCodeVerifier.leafPin(from: nil).failure, .securityCallReturnedNothing(PeerCodeVerifier.leafPinKey))
+    }
+
+    func testRejectsAPinOfTheWrongType() {
+        XCTAssertEqual(PeerCodeVerifier.leafPin(from: [PeerCodeVerifier.leafPinKey: 1]).failure, .securityCallReturnedNothing(PeerCodeVerifier.leafPinKey))
+    }
+
     func testRejectsAStatusOfTheWrongType() {
         let information: [String: Any] = [kSecCodeInfoStatus as String: "65536"]
 
@@ -476,11 +532,17 @@ final class PeerCodeVerifierTests: XCTestCase {
 
     private var runtimeFlag: UInt32 { SecCodeSignatureFlags.runtime.rawValue }
     private var adHocFlag: UInt32 { SecCodeSignatureFlags.adhoc.rawValue }
+    private let pinnedHash = "ea0ccfd73df5b789344b9dfcb73d985c8be24e20"
 
     // /bin/ls as the running code of a certificate-signed release.
     private func certificateSignedCode() throws -> OwnCode {
         let ls = try staticCode(at: URL(fileURLWithPath: "/bin/ls"))
         return OwnCode(staticCode: ls, leaf: try XCTUnwrap(PeerCodeVerifier.signingIdentity(of: ls).get().leaf))
+    }
+
+    /// The real running code and trust branch, with the empty pin that Xcode builds of the app carry.
+    private func runningOwnCodeWithoutPin() throws -> OwnCode {
+        try PeerCodeVerifier.ownCode(running: try runningCode(), onDisk: try staticCode(at: try ownCodeURL()), pinReader: { _ in .success(nil) }).get()
     }
 
     private func runningCode() throws -> SecCode {
