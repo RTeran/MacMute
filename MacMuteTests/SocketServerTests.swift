@@ -317,10 +317,16 @@ final class SocketServerTests: XCTestCase {
 
     func testDoesNotListenWhenTheTrustedRequirementCannotBeBuilt() {
         server.stop()
+        let failed = expectState(.failed)
         startServer(maxClients: 1, makeVerifyPeer: { .failure(.ownSignatureUnavailable(errSecCSUnsigned)) })
+        wait(for: [failed], timeout: 2)
+        let settled = expectation(description: "a retry would have run")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { settled.fulfill() }
+        wait(for: [settled], timeout: 2)
 
         XCTAssertEqual(send(["type": "ping"], to: 1), "no_socket_client")
         XCTAssertFalse(FileManager.default.fileExists(atPath: socketPath))
+        XCTAssertFalse(states.contains { if case .retrying = $0 { return true } else { return false } }, "\(states)")
     }
 
     func testDoesNotListenWhenTheSocketDirectoryIsASymbolicLink() throws {
@@ -422,6 +428,23 @@ final class SocketServerTests: XCTestCase {
         let firstRetry = expectState(.retrying(after: 0.02))
         server.start()
         wait(for: [firstRetry], timeout: 2)
+    }
+
+    func testStoppingLeavesASocketThatReplacedItsOwn() throws {
+        _ = connectHelper()
+        unlink(socketPath)
+        let replacement = socket(AF_UNIX, SOCK_STREAM, 0)
+        defer { close(replacement) }
+        var address = try SocketServer.socketAddress(for: socketPath).get()
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(replacement, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        }
+        XCTAssertEqual(bound, 0)
+        let replacementInode = try inode(of: socketPath)
+
+        server.stop()
+
+        XCTAssertEqual(try inode(of: socketPath), replacementInode)
     }
 
     func testStoppingLeavesAFileThatReplacedItsSocket() {
