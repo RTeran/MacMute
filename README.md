@@ -59,7 +59,7 @@ The folder name does not matter. Load only one copy of the extension in each Chr
    codesign -dr - /Applications/MacMute.app
    ```
 
-   The output must contain `certificate leaf = H"ea0ccfd73df5b789344b9dfcb73d985c8be24e20"`. If it does not, delete the app and do not open it.
+   The output must contain `H"ea0ccfd73df5b789344b9dfcb73d985c8be24e20"`, the hash of the MacMute certificate. If it does not, delete the app and do not open it.
 3. Open it once. The app is not notarized by Apple, so macOS blocks it the first time with a message like *"MacMute" cannot be opened* or *Apple could not verify "MacMute"*. Open **System Settings → Privacy & Security**, scroll down to the message about MacMute and click **Open Anyway**. Then open the app again.
 
    If **Open Anyway** does not appear, and only after the checks above passed, remove the quarantine flag instead:
@@ -113,7 +113,7 @@ A program that runs as your user can start the real helper itself and send fake 
 
 The same kind of program could create the app's socket, `~/Library/Application Support/MacMute/macmute.sock`, and then start the real app inside its own process (fork, then exec). It is not verified whether the helper would accept that app. This risk is also accepted.
 
-The app and the helper only accept each other from this release on. Builds from v1.0 and v1.1 run without the hardened runtime, so the new app and helper reject them. Do not mix versions: run only the latest MacMute.
+The app and the helper only accept each other from this release on. v1.0 is not signed with the MacMute certificate (it is ad-hoc), and v1.1 runs without the hardened runtime, so the new app and helper reject both. Do not mix versions: run only the latest MacMute.
 
 ## Development
 
