@@ -67,10 +67,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
-        do {
-            try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helperPath)
-        } catch {
+        let executability = ensureExecutable(atPath: helperPath)
+        if let error = executability.chmodError {
             logger.error("Failed to make MacMuteHelper executable: \(errorCode(error), privacy: .public)")
+        }
+        guard executability.isExecutable else {
+            logger.error("MacMuteHelper is not executable")
             return false
         }
 
