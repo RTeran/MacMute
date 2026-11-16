@@ -24,8 +24,19 @@ require_hardened_runtime() {
     exit 1
   fi
 }
-require_hardened_runtime "$APP/Contents/Resources/MacMuteHelper"
-require_hardened_runtime "$APP"
+# A debugger-attach entitlement would let any process read and patch the signed app.
+reject_get_task_allow() {
+  local entitlements
+  entitlements="$(codesign -d --entitlements - "$1" 2>&1)"
+  if grep -q 'com.apple.security.get-task-allow' <<<"$entitlements"; then
+    echo "error: $1 is signed with com.apple.security.get-task-allow" >&2
+    exit 1
+  fi
+}
+for code in "$APP/Contents/Resources/MacMuteHelper" "$APP"; do
+  require_hardened_runtime "$code"
+  reject_get_task_allow "$code"
+done
 
 rm -rf "$DIST" && mkdir -p "$DIST"
 ditto -c -k --keepParent "$APP" "$DIST/MacMute-app.zip"
