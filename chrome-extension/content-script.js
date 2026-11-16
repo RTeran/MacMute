@@ -47,22 +47,23 @@
   ];
 
   // Searching the whole document with substring selectors is the costly part of reading the
-  // state, so a found button is reused while it is still in the page and still matches.
+  // state, so a found button is reused while it is still in the page and still matches. Only
+  // the selectors ranked above it are searched again, so a better match still wins.
   const buttonCache = { mic: null, camera: null };
 
   function findButton(target, selectors) {
     const cached = buttonCache[target];
-    if (cached && cached.button.isConnected && cached.button.matches(cached.selector)) {
-      return cached.button;
-    }
-    buttonCache[target] = null;
-    for (const selector of selectors) {
-      const button = document.querySelector(selector);
+    const cacheValid = cached && cached.button.isConnected && cached.button.matches(selectors[cached.index]);
+    const searchUntil = cacheValid ? cached.index : selectors.length;
+    for (let index = 0; index < searchUntil; index++) {
+      const button = document.querySelector(selectors[index]);
       if (button) {
-        buttonCache[target] = { button, selector };
+        buttonCache[target] = { button, index };
         return button;
       }
     }
+    if (cacheValid) return cached.button;
+    buttonCache[target] = null;
     return null;
   }
 

@@ -1476,6 +1476,15 @@ describe("global state observer batching", () => {
     expect(stateUpdates()).toEqual([{ type: "state_update", muted: true }]);
   });
 
+  test("prefers a higher-priority button that appears after a lower-priority one was found", () => {
+    document.body.innerHTML = '<button aria-label="Turn off microphone"></button>';
+    expect(script.findMuteButton().getAttribute("aria-label")).toBe("Turn off microphone");
+
+    document.body.insertAdjacentHTML("beforeend", '<button data-is-muted="false"></button>');
+
+    expect(script.findMuteButton().hasAttribute("data-is-muted")).toBe(true);
+  });
+
   test("searches again when the cached button no longer matches its selector", () => {
     document.body.innerHTML = '<button aria-label="Turn off camera"></button>';
     const button = script.findCameraButton();
