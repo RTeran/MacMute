@@ -9,7 +9,7 @@ class NativeMessaging {
         do {
             data = try JSONSerialization.data(withJSONObject: message)
         } catch {
-            HelperLog.logger.error("Failed to serialize message for Chrome \(String(describing: message), privacy: .public): \(error.localizedDescription, privacy: .public)")
+            HelperLog.logger.error("Failed to serialize message for Chrome \(preview(message), privacy: .public): \(error.localizedDescription, privacy: .public)")
             return
         }
 
@@ -46,7 +46,7 @@ let socketClient = SocketClient()
 
 // Messages from the app → forward to Chrome extension
 socketClient.onMessageReceived = { message in
-    HelperLog.logger.info("Relaying app → extension: \(String(describing: message), privacy: .public)")
+    HelperLog.logger.info("Relaying app → extension: \(preview(message), privacy: .public)")
     NativeMessaging.writeMessage(message)
 }
 
@@ -69,7 +69,7 @@ DispatchQueue.global(qos: .userInteractive).async {
         case let .skipped(reason):
             HelperLog.logger.error("Skipping a message from the extension: \(reason, privacy: .public)")
         case let .message(message):
-            HelperLog.logger.info("Relaying extension → app: \(String(describing: message), privacy: .public)")
+            HelperLog.logger.info("Relaying extension → app: \(preview(message), privacy: .public)")
             socketClient.sendMessage(message)
         }
     }

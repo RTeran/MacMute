@@ -14,10 +14,7 @@ final class SocketClientTests: XCTestCase {
         super.setUp()
         socketDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("mc-\(UUID().uuidString.prefix(8))")
         socketPath = socketDirectory.appendingPathComponent("s.sock").path
-        client = SocketClient(socketPath: socketPath, backoff: RetryBackoff(first: 0.02, maximum: 0.05))
-        client.onStateChange = { [weak self] state in
-            DispatchQueue.main.async { self?.record(state) }
-        }
+        client = makeClient()
     }
 
     override func tearDown() {
@@ -107,10 +104,55 @@ final class SocketClientTests: XCTestCase {
         XCTAssertFalse(states.contains(.connected), "\(states)")
     }
 
+    func testDisconnectsAndRetriesWhenTheAppSendsALineOverTheLimit() {
+        client = makeClient(maxLineLength: 64)
+        startServer()
+        let connected = expectState(.connected)
+        let helperAccepted = expectHelper()
+        client.start()
+        wait(for: [connected, helperAccepted], timeout: 2)
+        client.onMessageReceived = { _ in XCTFail("an oversized line must not be delivered") }
+        let statesBefore = states.count
+        let reconnected = expectState(.connected)
+
+        server?.sendMessage(["type": "get_state", "padding": String(repeating: "x", count: 64)], to: helperIDs[0])
+
+        wait(for: [reconnected], timeout: 2)
+        XCTAssertEqual(Array(states[statesBefore...]), [.waiting(retryIn: 0.02), .connected])
+    }
+
+    func testDeliversALineAtTheLimit() {
+        client = makeClient(maxLineLength: 64)
+        startServer()
+        let connected = expectHelper()
+        client.start()
+        wait(for: [connected], timeout: 2)
+        let received = expectation(description: "message at the limit")
+        client.onMessageReceived = { _ in received.fulfill() }
+        let message = ["type": "get_state", "padding": String(repeating: "x", count: 64 - 33)]
+        XCTAssertEqual(try JSONSerialization.data(withJSONObject: message).count, 64)
+
+        server?.sendMessage(message, to: helperIDs[0])
+
+        wait(for: [received], timeout: 2)
+    }
+
+    func testTheHelperAcceptsLinesUpTo64KB() {
+        XCTAssertEqual(SocketClient.defaultMaxLineLength, 64 * 1024)
+    }
+
     func testTheHelperBacksOffFromHalfASecondUpToTenSeconds() {
         var backoff = SocketClient.defaultBackoff
 
         XCTAssertEqual((0..<7).map { _ in backoff.nextDelay() }, [0.5, 1, 2, 4, 8, 10, 10])
+    }
+
+    private func makeClient(maxLineLength: Int = SocketClient.defaultMaxLineLength) -> SocketClient {
+        let client = SocketClient(socketPath: socketPath, backoff: RetryBackoff(first: 0.02, maximum: 0.05), maxLineLength: maxLineLength)
+        client.onStateChange = { [weak self] state in
+            DispatchQueue.main.async { self?.record(state) }
+        }
+        return client
     }
 
     private func startServer() {
@@ -118,6 +160,7 @@ final class SocketClientTests: XCTestCase {
         server.onClientConnected = { [weak self] id in
             self?.helperIDs.append(id)
             self?.helperConnected?.fulfill()
+            self?.helperConnected = nil
         }
         server.start()
         self.server = server
