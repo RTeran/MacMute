@@ -112,9 +112,12 @@ class SocketServer {
             }
             return (offset, nil)
         }
+        // The socket is non-blocking: a helper that stops reading must not stall the queue, and
+        // a partly written line would corrupt the stream, so the helper is dropped.
         guard written == total else {
             let cause = writeErrno.map { String(cString: strerror($0)) } ?? "no buffer"
-            logger.error("Failed to write to helper \(clientID, privacy: .public) (\(written, privacy: .public)/\(total, privacy: .public) bytes): \(cause, privacy: .public)")
+            logger.error("Disconnecting helper \(clientID, privacy: .public): wrote \(written, privacy: .public)/\(total, privacy: .public) bytes: \(cause, privacy: .public)")
+            dropClient(clientID)
             return .failure(.writeFailed)
         }
         logger.info("Sent to helper \(clientID, privacy: .public): \(String(describing: message), privacy: .public)")
@@ -191,6 +194,13 @@ class SocketServer {
             logger.error("Failed to set SO_NOSIGPIPE: \(String(cString: strerror(errno)), privacy: .public)")
         }
 
+        let flags = fcntl(client, F_GETFL)
+        guard flags >= 0, fcntl(client, F_SETFL, flags | O_NONBLOCK) == 0 else {
+            logger.error("Rejecting helper: cannot make its socket non-blocking: \(String(cString: strerror(errno)), privacy: .public)")
+            close(client)
+            return
+        }
+
         let id = nextClientID
         nextClientID += 1
         clients[id] = Client(fd: client, readSource: makeReadSource(for: client, id: id))
@@ -210,6 +220,9 @@ class SocketServer {
             var readBuffer = [UInt8](repeating: 0, count: 4096)
             let bytesRead = read(client, &readBuffer, readBuffer.count)
 
+            if bytesRead < 0 && (errno == EAGAIN || errno == EINTR) {
+                return
+            }
             if bytesRead <= 0 {
                 let cause = bytesRead < 0 ? String(cString: strerror(errno)) : "end of stream"
                 self.logger.notice("Helper \(id, privacy: .public) disconnected (\(cause, privacy: .public))")

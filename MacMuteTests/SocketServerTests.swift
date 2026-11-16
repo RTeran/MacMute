@@ -107,6 +107,39 @@ final class SocketServerTests: XCTestCase {
         wait(for: [disconnected], timeout: 2)
     }
 
+    func testDisconnectsAHelperThatStopsReadingWithoutBlockingTheOthers() {
+        let (_, stuckID) = connectHelper()
+        let (other, otherID) = connectHelper()
+        let disconnected = expectDisconnection(of: stuckID)
+        let bulky: [String: Any] = ["type": "bulk", "padding": String(repeating: "x", count: 32 * 1024)]
+
+        var outcome = send(bulky, to: stuckID)
+        for _ in 0..<100 where outcome == "sent" {
+            outcome = send(bulky, to: stuckID)
+        }
+
+        XCTAssertEqual(outcome, "write_failed")
+        wait(for: [disconnected], timeout: 2)
+        XCTAssertEqual(send(["type": "ping"], to: otherID), "sent")
+        XCTAssertEqual(readLine(from: other), #"{"type":"ping"}"#)
+    }
+
+    func testStopReturnsWhileAHelperIsNotReading() {
+        let (_, stuckID) = connectHelper()
+        let bulky: [String: Any] = ["type": "bulk", "padding": String(repeating: "x", count: 32 * 1024)]
+        for _ in 0..<4 {
+            server.sendMessage(bulky, to: stuckID)
+        }
+        let stopped = expectation(description: "stop returned")
+
+        DispatchQueue.global().async { [server] in
+            server?.stop()
+            stopped.fulfill()
+        }
+
+        wait(for: [stopped], timeout: 2)
+    }
+
     // MARK: - Helpers
 
     private func connectHelper(file: StaticString = #filePath, line: UInt = #line) -> (Int32, ClientID) {
