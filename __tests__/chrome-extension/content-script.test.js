@@ -1442,10 +1442,13 @@ describe("global state observer batching", () => {
     const btn = document.querySelector("[data-is-muted]");
     const querySelector = jest.spyOn(document, "querySelector");
 
-    await flipMic(10, btn);
+    chrome.runtime.sendMessage.mockClear();
+
+    await flipMic(9, btn);
     jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
 
     expect(querySelector).not.toHaveBeenCalled();
+    expect(stateUpdates()).toEqual([{ type: "state_update", muted: true }]);
     querySelector.mockRestore();
   });
 
@@ -1460,7 +1463,7 @@ describe("global state observer batching", () => {
     jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
 
     const selectorCount = script.MUTE_BUTTON_SELECTORS.length + script.CAMERA_BUTTON_SELECTORS.length;
-    expect(querySelector.mock.calls.length).toBeLessThanOrEqual(selectorCount);
+    expect(querySelector).toHaveBeenCalledTimes(selectorCount);
     querySelector.mockRestore();
   });
 
@@ -1472,6 +1475,49 @@ describe("global state observer batching", () => {
     document.body.innerHTML = '<button data-is-muted="true"></button>';
     await Promise.resolve();
     jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
+
+    expect(stateUpdates()).toEqual([{ type: "state_update", muted: true }]);
+  });
+
+  test("reports the state of each burst", async () => {
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+    chrome.runtime.sendMessage.mockClear();
+
+    await flipMic(1);
+    jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
+    await flipMic(2);
+    jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
+
+    expect(stateUpdates()).toEqual([
+      { type: "state_update", muted: true },
+      { type: "state_update", muted: false },
+    ]);
+  });
+
+  test("reports a camera change seen by the observer", async () => {
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+    chrome.runtime.sendMessage.mockClear();
+
+    document.querySelector('[aria-label="Turn off camera"]').setAttribute("aria-label", "Turn on camera");
+    await Promise.resolve();
+    jest.advanceTimersByTime(script.STATE_REPORT_DELAY_MS);
+
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: "camera_state_update", active: false });
+  });
+
+  test("reports during a long stream of mutations instead of waiting for it to stop", async () => {
+    document.body.innerHTML = MIC_ON + CAMERA_ON;
+    script.startObserving();
+    chrome.runtime.sendMessage.mockClear();
+
+    await flipMic(1);
+    for (let elapsed = 0; elapsed < 300; elapsed += 50) {
+      document.body.appendChild(document.createElement("div"));
+      await Promise.resolve();
+      jest.advanceTimersByTime(50);
+    }
 
     expect(stateUpdates()).toEqual([{ type: "state_update", muted: true }]);
   });
