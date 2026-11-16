@@ -83,10 +83,6 @@ struct CallRouter {
         toggleRecipients[target] = id
     }
 
-    func isToggleRecipient(_ id: ClientID, for target: ToggleTarget) -> Bool {
-        toggleRecipients[target] == id
-    }
-
     func toggleRecipient(for target: ToggleTarget) -> ClientID? {
         toggleRecipients[target]
     }

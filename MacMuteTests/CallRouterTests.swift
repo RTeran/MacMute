@@ -172,10 +172,8 @@ final class CallRouterTests: XCTestCase {
         router.toggleSent(.mic, to: 1)
         router.toggleSent(.camera, to: 2)
 
-        XCTAssertTrue(router.isToggleRecipient(1, for: .mic))
-        XCTAssertFalse(router.isToggleRecipient(2, for: .mic))
-        XCTAssertTrue(router.isToggleRecipient(2, for: .camera))
-        XCTAssertFalse(router.isToggleRecipient(1, for: .camera))
+        XCTAssertEqual(router.toggleRecipient(for: .mic), 1)
+        XCTAssertEqual(router.toggleRecipient(for: .camera), 2)
     }
 
     func testDisconnectingReturnsTheTargetsItWasTheToggleRecipientFor() {
@@ -185,7 +183,7 @@ final class CallRouterTests: XCTestCase {
         router.toggleSent(.camera, to: 2)
 
         XCTAssertEqual(router.disconnect(1), [.mic])
-        XCTAssertFalse(router.isToggleRecipient(1, for: .mic))
+        XCTAssertNil(router.toggleRecipient(for: .mic))
     }
 
     func testIgnoresHelpersItDoesNotKnow() {
