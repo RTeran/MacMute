@@ -206,7 +206,28 @@ final class SocketServerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.createFile(atPath: file.path, contents: Data()))
         defer { try? FileManager.default.removeItem(at: file) }
 
-        XCTAssertThrowsError(try SocketServer.prepareDirectory(file))
+        XCTAssertThrowsError(try SocketServer.prepareDirectory(file)) { error in
+            guard case SocketDirectoryError.operationFailed("createDirectory", _) = error else {
+                return XCTFail("Unexpected error \(error)")
+            }
+        }
+    }
+
+    func testRefusesASocketDirectoryThatIsASymbolicLink() throws {
+        let target = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("mm-target-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        let link = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("mm-link-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        defer {
+            try? FileManager.default.removeItem(at: link)
+            try? FileManager.default.removeItem(at: target)
+        }
+
+        XCTAssertThrowsError(try SocketServer.prepareDirectory(link)) { error in
+            guard case SocketDirectoryError.symbolicLink = error else {
+                return XCTFail("Unexpected error \(error)")
+            }
+        }
     }
 
     func testCreatesTheSocketDirectoryForTheOwnerOnly() throws {

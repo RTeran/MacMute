@@ -69,12 +69,12 @@ class SocketServer {
         do {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: ownerOnly)
         } catch {
-            throw SocketDirectoryError.operationFailed("createDirectory", String(describing: error))
+            throw SocketDirectoryError.operationFailed("createDirectory", Self.errorCode(error))
         }
         do {
             try FileManager.default.setAttributes(ownerOnly, ofItemAtPath: url.path)
         } catch {
-            throw SocketDirectoryError.operationFailed("setAttributes", String(describing: error))
+            throw SocketDirectoryError.operationFailed("setAttributes", Self.errorCode(error))
         }
         var info = stat()
         guard lstat(url.path, &info) == 0 else {
@@ -85,6 +85,13 @@ class SocketServer {
         guard type == S_IFDIR else { throw SocketDirectoryError.notADirectory }
         guard info.st_uid == getuid() else { throw SocketDirectoryError.ownedByAnotherUser(info.st_uid) }
         guard info.st_mode & 0o077 == 0 else { throw SocketDirectoryError.accessibleByOthers(info.st_mode & 0o777) }
+    }
+
+    // NSError descriptions carry the full path, which contains the user name.
+    private static func errorCode(_ error: Error) -> String {
+        let nsError = error as NSError
+        let underlying = (nsError.userInfo[NSUnderlyingErrorKey] as? NSError).map { ", \($0.domain) \($0.code)" } ?? ""
+        return "\(nsError.domain) \(nsError.code)\(underlying)"
     }
 
     // The full path contains the user name.
@@ -171,7 +178,7 @@ class SocketServer {
         do {
             try Self.prepareDirectory(directory)
         } catch {
-            logger.fault("Not starting the socket server: unsafe socket directory \(directory.path, privacy: .public): \(String(describing: error), privacy: .public)")
+            logger.fault("Not starting the socket server: unsafe socket directory \(directory.lastPathComponent, privacy: .public): \(String(describing: error), privacy: .public)")
             return
         }
         switch makeVerifyPeer() {
