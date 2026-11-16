@@ -329,6 +329,16 @@ final class SocketServerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: socketPath))
     }
 
+    func testStoppingLeavesAFileThatReplacedItsSocket() {
+        _ = connectHelper()
+        unlink(socketPath)
+        XCTAssertTrue(FileManager.default.createFile(atPath: socketPath, contents: Data("other".utf8)))
+
+        server.stop()
+
+        XCTAssertEqual(FileManager.default.contents(atPath: socketPath), Data("other".utf8))
+    }
+
     func testStoppingAServerThatRefusedToStartLeavesTheFileAtItsPathAlone() throws {
         server.stop()
         try FileManager.default.removeItem(at: socketDirectory)

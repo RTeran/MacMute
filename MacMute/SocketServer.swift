@@ -30,8 +30,9 @@ class SocketServer {
     private var verifyPeer: VerifyPeer = { _ in .failure(.requirementNotSatisfied(errSecCSReqFailed)) }
     private var rejectionLog = PeerRejectionLog()
     private var serverSocket: Int32 = -1
-    // A refused start must not unlink whatever sits at socketPath, e.g. behind a symlinked directory.
-    private var didBind = false
+    // Only the socket this server bound is unlinked: a refused start must not remove whatever sits at
+    // socketPath (e.g. behind a symlinked directory), nor a file that replaced the socket later.
+    private var boundFile: (device: dev_t, inode: ino_t)?
     private var listenSource: DispatchSourceRead?
     private var clients: [ClientID: Client] = [:]
     private var nextClientID: ClientID = 1
@@ -151,8 +152,7 @@ class SocketServer {
             clients.values.forEach { $0.readSource.cancel() }
             clients.removeAll()
             serverSocket = -1
-            if didBind { unlink(socketPath) }
-            didBind = false
+            unlinkBoundFile()
         }
     }
 
@@ -254,22 +254,26 @@ class SocketServer {
 
         guard bindResult == 0 else {
             logger.error("Failed to bind socket \(self.socketName, privacy: .public): \(String(cString: strerror(errno)), privacy: .public)")
-            close(serverSocket)
+            abortStart()
             return
         }
-        didBind = true
+        var info = stat()
+        guard lstat(socketPath, &info) == 0 else {
+            logger.error("Failed to stat socket \(self.socketName, privacy: .public): \(String(cString: strerror(errno)), privacy: .public)")
+            abortStart()
+            return
+        }
+        boundFile = (info.st_dev, info.st_ino)
 
         guard chmod(socketPath, 0o600) == 0 else {
             logger.error("Failed to restrict socket \(self.socketName, privacy: .public) to the owner: \(String(cString: strerror(errno)), privacy: .public)")
-            close(serverSocket)
-            unlink(socketPath)
-            didBind = false
+            abortStart()
             return
         }
 
         guard listen(serverSocket, Self.listenBacklog) == 0 else {
             logger.error("Failed to listen on socket: \(String(cString: strerror(errno)), privacy: .public)")
-            close(serverSocket)
+            abortStart()
             return
         }
 
@@ -285,6 +289,23 @@ class SocketServer {
         }
         source.resume()
         self.listenSource = source
+    }
+
+    private func abortStart() {
+        if serverSocket >= 0 { close(serverSocket) }
+        serverSocket = -1
+        unlinkBoundFile()
+    }
+
+    private func unlinkBoundFile() {
+        guard let bound = boundFile else { return }
+        boundFile = nil
+        var info = stat()
+        guard lstat(socketPath, &info) == 0,
+              info.st_mode & S_IFMT == S_IFSOCK,
+              info.st_dev == bound.device,
+              info.st_ino == bound.inode else { return }
+        unlink(socketPath)
     }
 
     private func acceptConnection() {
