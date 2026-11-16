@@ -480,6 +480,39 @@ final class SocketServerTests: XCTestCase {
         _ = connectHelper()
     }
 
+    func testRetriesDoNotLeakDescriptors() throws {
+        server.stop()
+        try leaveUnremovableStaleSocket()
+        let firstRetry = expectState(.retrying(after: 0.02))
+        startServer()
+        wait(for: [firstRetry], timeout: 2)
+        let afterFirstRetry = openServerDescriptors()
+
+        for _ in 0..<3 {
+            let retry = expectState(.retrying(after: 0.05))
+            wait(for: [retry], timeout: 2)
+        }
+
+        XCTAssertEqual(openServerDescriptors(), afterFirstRetry)
+    }
+
+    func testARefusedSecondServerDoesNotLeakDescriptors() {
+        server.stop()
+        let listening = expectState(.listening)
+        startServer()
+        wait(for: [listening], timeout: 2)
+        let before = openServerDescriptors()
+        let second = SocketServer(socketPath: socketPath, makeVerifyPeer: { .success { _ in .success(()) } })
+        let reported = expectation(description: "second server state")
+        second.onStateChange = { _ in reported.fulfill() }
+
+        second.start()
+        wait(for: [reported], timeout: 2)
+
+        XCTAssertEqual(openServerDescriptors(), before)
+        second.stop()
+    }
+
     func testStoppingCancelsAPendingRetry() throws {
         server.stop()
         try leaveUnremovableStaleSocket()
@@ -693,6 +726,20 @@ final class SocketServerTests: XCTestCase {
 
     private func allowRemovingTheStaleSocket() {
         XCTAssertEqual(chflags(socketPath, 0), 0)
+    }
+
+    /// Sockets plus descriptors of this test's lock file; the test runner keeps other files open.
+    private func openServerDescriptors() -> Int {
+        let lockName = "\(socketDirectory.lastPathComponent)/macmute.lock"
+        let descriptors = (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd")) ?? []
+        return descriptors.compactMap { Int32($0) }.filter { fd in
+            var info = stat()
+            guard fstat(fd, &info) == 0 else { return false }
+            if info.st_mode & S_IFMT == S_IFSOCK { return true }
+            var path = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+            guard fcntl(fd, F_GETPATH, &path) == 0 else { return false }
+            return String(cString: path).hasSuffix(lockName)
+        }.count
     }
 
     private func waitLongerThanARetry() {
