@@ -25,8 +25,11 @@ final class SocketServerTests: XCTestCase {
         super.tearDown()
     }
 
-    private func startServer(maxClients: Int = SocketServer.defaultMaxClients) {
-        server = SocketServer(socketPath: socketPath, maxClients: maxClients)
+    private func startServer(
+        maxClients: Int = SocketServer.defaultMaxClients,
+        verifyPeer: @escaping SocketServer.VerifyPeer = { _ in .success(()) }
+    ) {
+        server = SocketServer(socketPath: socketPath, maxClients: maxClients, verifyPeer: verifyPeer)
         server.onClientConnected = { [weak self] id in
             guard let self else { return }
             self.connectedIDs.append(id)
@@ -129,6 +132,52 @@ final class SocketServerTests: XCTestCase {
         XCTAssertTrue(waitForEndOfStream(on: extra))
         XCTAssertEqual(send(["type": "ping"], to: firstID), "sent")
         XCTAssertEqual(readLine(from: first), #"{"type":"ping"}"#)
+    }
+
+    func testClosesARejectedPeerWithoutGivingItASlot() {
+        server.stop()
+        var verifications = 0
+        startServer(maxClients: 1) { _ in
+            verifications += 1
+            return verifications == 1 ? .failure(.requirementNotSatisfied(errSecCSReqFailed)) : .success(())
+        }
+
+        let rejected = rawConnect()
+        XCTAssertTrue(waitForEndOfStream(on: rejected))
+        let (helper, id) = connectHelper()
+
+        XCTAssertEqual(connectedIDs, [id])
+        XCTAssertEqual(send(["type": "ping"], to: id), "sent")
+        XCTAssertEqual(readLine(from: helper), #"{"type":"ping"}"#)
+    }
+
+    func testOnlyTheOwnerCanUseTheSocket() throws {
+        _ = connectHelper()
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: socketPath)
+
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    }
+
+    func testCreatesTheSocketDirectoryForTheOwnerOnly() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("mm-dir-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        try SocketServer.prepareDirectory(directory)
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: directory.path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o700)
+    }
+
+    func testRestrictsAnExistingSocketDirectoryToTheOwner() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("mm-dir-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o755])
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        try SocketServer.prepareDirectory(directory)
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: directory.path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o700)
     }
 
     func testDisconnectsAHelperThatSendsALineLongerThanTheLimit() {

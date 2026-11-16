@@ -12,6 +12,8 @@ enum SocketSendError: String, Error {
 typealias ClientID = Int
 
 class SocketServer {
+    typealias VerifyPeer = (_ socket: Int32) -> Result<Void, PeerVerificationError>
+
     static let defaultMaxClients = 16
     private static let listenBacklog: Int32 = 8
 
@@ -22,6 +24,7 @@ class SocketServer {
 
     private let socketPath: String
     private let maxClients: Int
+    private let verifyPeer: VerifyPeer
     private var serverSocket: Int32 = -1
     private var listenSource: DispatchSourceRead?
     private var clients: [ClientID: Client] = [:]
@@ -34,16 +37,32 @@ class SocketServer {
     var onClientConnected: ((ClientID) -> Void)?
     var onClientDisconnected: ((ClientID) -> Void)?
 
+    /// Only accepts helpers signed like the one bundled in this app.
     convenience init() {
         let appSupport = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/MacMute")
-        try? FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
-        self.init(socketPath: appSupport.appendingPathComponent("macmute.sock").path)
+        do {
+            try Self.prepareDirectory(appSupport)
+        } catch {
+            Logger(subsystem: "com.macmute.app", category: "socket")
+                .error("Cannot restrict the socket directory to the owner: \(error.localizedDescription, privacy: .public)")
+        }
+        let bundledHelper = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/MacMuteHelper")
+        self.init(socketPath: appSupport.appendingPathComponent("macmute.sock").path) { socket in
+            PeerCodeVerifier.verify(socket: socket, againstCodeAt: bundledHelper)
+        }
     }
 
-    init(socketPath: String, maxClients: Int = SocketServer.defaultMaxClients) {
+    init(socketPath: String, maxClients: Int = SocketServer.defaultMaxClients, verifyPeer: @escaping VerifyPeer) {
         self.socketPath = socketPath
         self.maxClients = maxClients
+        self.verifyPeer = verifyPeer
+    }
+
+    static func prepareDirectory(_ url: URL) throws {
+        let ownerOnly: [FileAttributeKey: Any] = [.posixPermissions: 0o700]
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: ownerOnly)
+        try FileManager.default.setAttributes(ownerOnly, ofItemAtPath: url.path)
     }
 
     // The full path contains the user name.
@@ -156,6 +175,13 @@ class SocketServer {
             return
         }
 
+        guard chmod(socketPath, 0o600) == 0 else {
+            logger.error("Failed to restrict socket \(self.socketName, privacy: .public) to the owner: \(String(cString: strerror(errno)), privacy: .public)")
+            close(serverSocket)
+            unlink(socketPath)
+            return
+        }
+
         guard listen(serverSocket, Self.listenBacklog) == 0 else {
             logger.error("Failed to listen on socket: \(String(cString: strerror(errno)), privacy: .public)")
             close(serverSocket)
@@ -180,6 +206,13 @@ class SocketServer {
         let client = accept(serverSocket, nil, nil)
         guard client >= 0 else {
             logger.error("Failed to accept connection: \(String(cString: strerror(errno)), privacy: .public)")
+            return
+        }
+
+        // Checked before the limit, so peers that fail it cannot use up the slots.
+        if case let .failure(error) = verifyPeer(client) {
+            logger.error("Rejecting peer: its code signature does not match the bundled helper (\(String(describing: error), privacy: .public))")
+            close(client)
             return
         }
 
