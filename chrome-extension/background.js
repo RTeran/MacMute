@@ -26,9 +26,11 @@ function connectNative() {
     return;
   }
   port = connection;
+  let answered = false;
 
   connection.onMessage.addListener((message) => {
     // The helper only relays what the app sends, so any message means the app accepted it.
+    answered = true;
     if (connection === port) reconnectDelayMs = RECONNECT_INITIAL_DELAY_MS;
     console.log("MacMute: Received from native host:", message);
     Promise.resolve(handleNativeMessage(message)).catch((error) => {
@@ -38,7 +40,9 @@ function connectNative() {
 
   connection.onDisconnect.addListener(() => {
     if (connection !== port) return;
-    console.log("MacMute: Native host disconnected:", chrome.runtime.lastError?.message);
+    // Closing before any message means the host is missing, forbidden or rejected by the app.
+    const log = answered ? console.log : console.warn;
+    log("MacMute: Native host disconnected:", chrome.runtime.lastError?.message);
     port = null;
     scheduleReconnect();
   });
@@ -52,8 +56,9 @@ const RECEIVER_MISSING_ERROR = "Receiving end does not exist";
 const REINJECT_DELAY_MS = 200;
 const TOGGLE_TARGETS = { toggle: "mic", toggle_camera: "camera" };
 
-// Passive updates are resent on the next change. A dropped toggle result is lost for good, and a
-// dropped call status or reset only comes back with the app's get_state on the next connection.
+// Passive updates are resent on the next change. A dropped toggle result is lost for good. A
+// dropped call status or reset is not queued: postCallStatus() sends it in full on the app's
+// get_state for the next connection, so a warning is enough here.
 function postToNative(message, { mustArrive = message.type === "toggle_result" || message.type === "call_status" } = {}) {
   if (!port) {
     const log = mustArrive ? console.warn : console.debug;
@@ -207,8 +212,9 @@ async function queryStateAndCall() {
   try {
     answers = await broadcastToMeetTabs({ type: "get_state" });
   } catch (error) {
-    console.warn("MacMute: tabs_query_failed, answering get_state from the tabs already known", error?.message);
-    postCallStatus();
+    console.warn("MacMute: tabs_query_failed while answering get_state", error);
+    // Right after a service worker restart nothing is known yet, and a reset could end a live call.
+    if (trackedBefore.length > 0) postCallStatus();
     return;
   }
   // Only tabs known before the broadcast: one that joined meanwhile may not be in the list yet.
@@ -217,14 +223,32 @@ async function queryStateAndCall() {
     if (!meetTabIds.has(tabId)) tabsInCall.delete(tabId);
   }
   for (const { tabId, reached, response } of answers) {
-    if (typeof response?.inCall !== "boolean" || response.error) {
-      if (reached) console.warn(`MacMute: tab ${tabId} could not tell whether it is in a call`, response);
-      continue;
-    }
-    if (response.inCall) tabsInCall.add(tabId);
-    else tabsInCall.delete(tabId);
+    const inCall = inCallFromAnswer(tabId, reached, response);
+    if (inCall === true) tabsInCall.add(tabId);
+    if (inCall === false) tabsInCall.delete(tabId);
   }
   postCallStatus();
+}
+
+// Undefined when the tab could not tell, so the caller keeps its last known membership.
+function inCallFromAnswer(tabId, reached, response) {
+  if (typeof response?.inCall === "boolean" && !response.error) return response.inCall;
+  if (reached) console.warn(`MacMute: tab ${tabId} could not tell whether it is in a call`, response);
+  return undefined;
+}
+
+// A finished load may be a reload or a page Meet swapped in without a call_left, so the tab is
+// asked again instead of guessing from the load events.
+async function recheckTabInCall(tabId) {
+  let response;
+  try {
+    response = await sendToTab(tabId, { type: "get_state" });
+  } catch (error) {
+    console.warn(`MacMute: Could not reach tab ${tabId}:`, error.message);
+    return;
+  }
+  const inCall = inCallFromAnswer(tabId, true, response);
+  if (inCall !== undefined) setTabInCall(tabId, inCall);
 }
 
 // A new helper connection starts with no call state in the app, so get_state always answers in
@@ -278,11 +302,12 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 // A tab suspender changes the tab's URL and Chrome's memory saver discards it. Without the "tabs"
 // permission, tab.url is only visible while the tab is on Meet, so a missing URL also means it left.
-// A reload sends no call_left from the old page; the new page's first state update rejoins.
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!tabsInCall.has(tabId)) return;
-  if (changeInfo.discarded || changeInfo.status === "loading" || !tab?.url?.startsWith(MEET_URL_PREFIX)) {
+  if (changeInfo.discarded || !tab?.url?.startsWith(MEET_URL_PREFIX)) {
     setTabInCall(tabId, false);
+  } else if (changeInfo.status === "complete") {
+    recheckTabInCall(tabId);
   }
 });
 

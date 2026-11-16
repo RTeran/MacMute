@@ -320,6 +320,7 @@ describe("native port", () => {
     jest.useFakeTimers();
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
     port.onDisconnect.addListener.mock.calls[0][0]();
+    warn.mockClear();
     const onMessage = chrome.runtime.onMessage.addListener.mock.calls[0][0];
 
     onMessage({ type: "state_update", muted: true }, {}, () => {});
@@ -473,19 +474,80 @@ describe("call status", () => {
     expect(posted()).toEqual([]);
   });
 
-  test("ends the call when its tab reloads, and starts it again from the new page", () => {
+  describe("when a tab in the call finishes loading", () => {
+    const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+    async function reloadTab(tabId) {
+      tabUpdated(tabId, { status: "loading" }, { id: tabId, url: MEET_TAB_URL, status: "loading" });
+      tabUpdated(tabId, { status: "complete" }, { id: tabId, url: MEET_TAB_URL, status: "complete" });
+      await flush();
+    }
+
+    beforeEach(() => {
+      contentScriptSends({ type: "state_update", muted: true }, fromTab(1));
+      port.postMessage.mockClear();
+    });
+
+    test("ends the call when the new page is not in it", async () => {
+      givenTabResponses({ 1: { inCall: false } });
+
+      await reloadTab(1);
+
+      expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(1, { type: "get_state" });
+      expect(posted()).toEqual(CALL_ENDED);
+    });
+
+    test("keeps the call when the new page is still in it", async () => {
+      givenTabResponses({ 1: { inCall: true } });
+
+      await reloadTab(1);
+
+      expect(posted()).toEqual([]);
+    });
+
+    test.each([
+      ["cannot read its state", { 1: { inCall: false, error: true } }],
+      ["cannot be reached", { 1: new Error("Could not establish connection") }],
+      ["gives no answer", { 1: undefined }],
+    ])("keeps the tab when the new page %s", async (_case, responses) => {
+      jest.spyOn(console, "warn").mockImplementation(() => {});
+      givenTabResponses(responses);
+
+      await reloadTab(1);
+      expect(posted()).toEqual([]);
+
+      contentScriptSends({ type: "call_left" }, fromTab(1));
+      expect(posted()).toEqual(CALL_ENDED);
+    });
+
+    test("does nothing while the tab is still loading", async () => {
+      tabUpdated(1, { status: "loading" }, { id: 1, url: MEET_TAB_URL, status: "loading" });
+      await flush();
+
+      expect(chrome.tabs.sendMessage).not.toHaveBeenCalled();
+      expect(posted()).toEqual([]);
+      contentScriptSends({ type: "call_left" }, fromTab(1));
+      expect(posted()).toEqual(CALL_ENDED);
+    });
+
+    test("asks no tab outside the call", async () => {
+      tabUpdated(7, { status: "loading" }, { id: 7, url: MEET_TAB_URL, status: "loading" });
+      tabUpdated(7, { status: "complete" }, { id: 7, url: MEET_TAB_URL, status: "complete" });
+      await flush();
+
+      expect(chrome.tabs.sendMessage).not.toHaveBeenCalled();
+      expect(posted()).toEqual([]);
+    });
+  });
+
+  test("keeps the call when one of two tabs in it is discarded", () => {
     contentScriptSends({ type: "state_update", muted: true }, fromTab(1));
+    contentScriptSends({ type: "state_update", muted: true }, fromTab(2));
     port.postMessage.mockClear();
 
-    tabUpdated(1, { status: "loading" }, { id: 1, url: MEET_TAB_URL, status: "loading" });
-    expect(posted()).toEqual(CALL_ENDED);
+    tabUpdated(1, { discarded: true }, { id: 1, url: MEET_TAB_URL, discarded: true });
 
-    port.postMessage.mockClear();
-    contentScriptSends({ type: "state_update", muted: true }, fromTab(1));
-    expect(posted()).toEqual([
-      { type: "call_status", inCall: true },
-      { type: "state_update", muted: true },
-    ]);
+    expect(posted()).toEqual([]);
   });
 
   test("ignores call_left without a sender tab", () => {
@@ -584,8 +646,21 @@ describe("call status", () => {
 
     await background.handleNativeMessage({ type: "get_state" });
 
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("tabs_query_failed"), "No tab API");
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("tabs_query_failed"),
+      expect.objectContaining({ message: "No tab API" })
+    );
     expect(posted()).toEqual([{ type: "call_status", inCall: true }]);
+  });
+
+  test("sends nothing for get_state when the Meet tabs cannot be listed and no tab is known yet", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    chrome.tabs.query.mockImplementation(() => Promise.reject(new Error("No tab API")));
+
+    await background.handleNativeMessage({ type: "get_state" });
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("tabs_query_failed"), expect.any(Error));
+    expect(posted()).toEqual([]);
   });
 
   test("keeps a tab that joined the call while get_state was waiting for answers", async () => {
@@ -617,6 +692,10 @@ describe("call status", () => {
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("Native port not connected"),
       { type: "state_update", muted: false }
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("Native port not connected"),
+      { type: "camera_state_update", active: true }
     );
 
     jest.advanceTimersByTime(3000);
@@ -727,6 +806,40 @@ describe("native host reconnection", () => {
     disconnect();
 
     expectReconnectAfter(3 * SECOND);
+  });
+
+  test("only a message on the current connection starts the delay over", () => {
+    const first = latestPort();
+    disconnect(first);
+    expectReconnectAfter(3 * SECOND);
+    disconnect();
+    expectReconnectAfter(6 * SECOND);
+
+    receive(first, { type: "unknown" });
+    disconnect();
+
+    expectReconnectAfter(12 * SECOND);
+  });
+
+  test("warns when a connection closes before the app sent anything on it", () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    chrome.runtime.lastError = { message: "Specified native messaging host not found." };
+
+    disconnect();
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("Native host disconnected"),
+      "Specified native messaging host not found."
+    );
+  });
+
+  test("does not warn when a connection the app answered on closes", () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+
+    receive(latestPort(), { type: "unknown" });
+    disconnect();
+
+    expect(warn).not.toHaveBeenCalled();
   });
 
   test("schedules one reconnection when a disconnect is reported twice", () => {
