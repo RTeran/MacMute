@@ -32,24 +32,32 @@
     'button[data-tooltip*="cámara" i]',
   ];
 
-  function findMuteButton() {
-    for (const selector of MUTE_BUTTON_SELECTORS) {
+  // Searching the whole document with substring selectors is the costly part of reading the
+  // state, so a found button is reused while it is still in the page and still matches.
+  const buttonCache = { mic: null, camera: null };
+
+  function findButton(target, selectors) {
+    const cached = buttonCache[target];
+    if (cached && cached.button.isConnected && cached.button.matches(cached.selector)) {
+      return cached.button;
+    }
+    buttonCache[target] = null;
+    for (const selector of selectors) {
       const button = document.querySelector(selector);
       if (button) {
+        buttonCache[target] = { button, selector };
         return button;
       }
     }
     return null;
   }
 
+  function findMuteButton() {
+    return findButton("mic", MUTE_BUTTON_SELECTORS);
+  }
+
   function findCameraButton() {
-    for (const selector of CAMERA_BUTTON_SELECTORS) {
-      const button = document.querySelector(selector);
-      if (button) {
-        return button;
-      }
-    }
-    return null;
+    return findButton("camera", CAMERA_BUTTON_SELECTORS);
   }
 
   function getMuteState() {
@@ -381,10 +389,26 @@
     }
   }
 
-  // Observe DOM for mute button appearance and state changes
-  const observer = new MutationObserver(() => {
+  // Meet mutates the page constantly, so the state is read once per burst of mutations. Toggles
+  // confirm through their own observer and are not delayed by this.
+  const STATE_REPORT_DELAY_MS = 100;
+  let stateReportTimer = null;
+
+  function reportObservedState() {
+    stateReportTimer = null;
     reportDomState("mic", getMuteState());
     reportDomState("camera", getCameraState());
+  }
+
+  function cancelStateReport() {
+    clearTimeout(stateReportTimer);
+    stateReportTimer = null;
+  }
+
+  const observer = new MutationObserver(() => {
+    if (stateReportTimer === null) {
+      stateReportTimer = setTimeout(reportObservedState, STATE_REPORT_DELAY_MS);
+    }
   });
 
   // Start observing once the page is ready
@@ -432,6 +456,7 @@
       MIC_STATE_CHANGE_TIMEOUT_MS,
       LATE_MEDIA_SESSION_WINDOW_MS,
       CAMERA_STATE_CHANGE_TIMEOUT_MS,
+      STATE_REPORT_DELAY_MS,
       _getObserver: () => observer,
       _getState: () => ({ currentMuteState, currentCameraState }),
       _setState: (s) => {
@@ -444,6 +469,9 @@
           mediaSessionSinceVisible.camera = undefined;
           stopLateWait("mic");
           stopLateWait("camera");
+          cancelStateReport();
+          buttonCache.mic = null;
+          buttonCache.camera = null;
           return;
         }
         currentMuteState = s.currentMuteState ?? currentMuteState;
