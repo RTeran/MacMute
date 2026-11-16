@@ -473,6 +473,39 @@ describe("call status", () => {
     expect(posted()).toEqual([]);
   });
 
+  test("ends the call when its tab reloads, and starts it again from the new page", () => {
+    contentScriptSends({ type: "state_update", muted: true }, fromTab(1));
+    port.postMessage.mockClear();
+
+    tabUpdated(1, { status: "loading" }, { id: 1, url: MEET_TAB_URL, status: "loading" });
+    expect(posted()).toEqual(CALL_ENDED);
+
+    port.postMessage.mockClear();
+    contentScriptSends({ type: "state_update", muted: true }, fromTab(1));
+    expect(posted()).toEqual([
+      { type: "call_status", inCall: true },
+      { type: "state_update", muted: true },
+    ]);
+  });
+
+  test("ignores call_left without a sender tab", () => {
+    contentScriptSends({ type: "state_update", muted: true }, fromTab(1));
+    port.postMessage.mockClear();
+
+    contentScriptSends({ type: "call_left" }, {});
+
+    expect(posted()).toEqual([]);
+  });
+
+  test("sends no second call_status when another tab reports during the call", () => {
+    contentScriptSends({ type: "state_update", muted: true }, fromTab(1));
+    port.postMessage.mockClear();
+
+    contentScriptSends({ type: "camera_state_update", active: false }, fromTab(2));
+
+    expect(posted()).toEqual([{ type: "camera_state_update", active: false }]);
+  });
+
   test("does no work when a tab outside the call is closed or updated", () => {
     chrome.tabs.onRemoved.addListener.mock.calls[0][0](7, {});
     tabUpdated(7, { url: "https://example.com/" }, { id: 7, url: "https://example.com/" });
@@ -494,12 +527,104 @@ describe("call status", () => {
     expect(posted()).toEqual(CALL_ENDED);
   });
 
-  test("answers get_state with no call when there is no Meet tab", async () => {
+  test("answers get_state with the full call reset when there is no Meet tab", async () => {
     givenMeetTabs([]);
 
     await background.handleNativeMessage({ type: "get_state" });
 
-    expect(posted()).toEqual([{ type: "call_status", inCall: false }]);
+    expect(posted()).toEqual(CALL_ENDED);
+  });
+
+  test("answers get_state with one call_status when a tab turns out to be in a call", async () => {
+    givenMeetTabs([{ id: 1 }]);
+    givenTabResponses({ 1: { inCall: true } });
+
+    await background.handleNativeMessage({ type: "get_state" });
+
+    expect(posted()).toEqual([{ type: "call_status", inCall: true }]);
+  });
+
+  test("answers get_state with one call_status and no reset for a tab already in the call", async () => {
+    contentScriptSends({ type: "state_update", muted: true }, fromTab(1));
+    port.postMessage.mockClear();
+    givenMeetTabs([{ id: 1 }]);
+    givenTabResponses({ 1: { inCall: true } });
+
+    await background.handleNativeMessage({ type: "get_state" });
+
+    expect(posted()).toEqual([{ type: "call_status", inCall: true }]);
+  });
+
+  test("leaves out an untracked tab that cannot tell whether it is in a call", async () => {
+    jest.spyOn(console, "warn").mockImplementation(() => {});
+    givenMeetTabs([{ id: 1 }]);
+    givenTabResponses({ 1: { inCall: false, error: true } });
+
+    await background.handleNativeMessage({ type: "get_state" });
+
+    expect(posted()).toEqual(CALL_ENDED);
+  });
+
+  test("warns about tabs that cannot answer get_state", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    givenMeetTabs([{ id: 1 }, { id: 2 }]);
+    givenTabResponses({ 1: { inCall: false, error: true }, 2: new Error("Could not establish connection") });
+
+    await background.handleNativeMessage({ type: "get_state" });
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("tab 1"), expect.anything());
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("tab 2"), "Could not establish connection");
+  });
+
+  test("answers get_state from the tabs it knows when the Meet tabs cannot be listed", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    contentScriptSends({ type: "state_update", muted: true }, fromTab(1));
+    port.postMessage.mockClear();
+    chrome.tabs.query.mockImplementation(() => Promise.reject(new Error("No tab API")));
+
+    await background.handleNativeMessage({ type: "get_state" });
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("tabs_query_failed"), "No tab API");
+    expect(posted()).toEqual([{ type: "call_status", inCall: true }]);
+  });
+
+  test("keeps a tab that joined the call while get_state was waiting for answers", async () => {
+    givenMeetTabs([{ id: 1 }]);
+    chrome.tabs.sendMessage.mockImplementation(() => {
+      contentScriptSends({ type: "state_update", muted: true }, fromTab(5));
+      return Promise.resolve({ inCall: false });
+    });
+
+    await background.handleNativeMessage({ type: "get_state" });
+    expect(postedCallStatus()).not.toContainEqual({ type: "call_status", inCall: false });
+
+    port.postMessage.mockClear();
+    contentScriptSends({ type: "call_left" }, fromTab(5));
+    expect(posted()).toEqual(CALL_ENDED);
+  });
+
+  test("sends the call reset again on reconnection when it was lost with the port", async () => {
+    jest.useFakeTimers();
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    contentScriptSends({ type: "state_update", muted: true }, fromTab(1));
+    port.onDisconnect.addListener.mock.calls[0][0]();
+
+    contentScriptSends({ type: "call_left" }, fromTab(1));
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("Native port not connected"),
+      { type: "call_status", inCall: false }
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("Native port not connected"),
+      { type: "state_update", muted: false }
+    );
+
+    jest.advanceTimersByTime(3000);
+    const newPort = chrome.runtime.connectNative.mock.results.at(-1).value;
+    givenMeetTabs([]);
+    await background.handleNativeMessage({ type: "get_state" });
+
+    expect(newPort.postMessage.mock.calls.map(([message]) => message)).toEqual(CALL_ENDED);
   });
 
   test("ends the call when get_state finds the tab is no longer in it", async () => {
@@ -528,6 +653,7 @@ describe("call status", () => {
     ["the tab could not be reached", { 1: new Error("Could not establish connection") }],
     ["the tab gave no answer", { 1: undefined }],
   ])("keeps a tab in the call when %s", async (_case, responses) => {
+    jest.spyOn(console, "warn").mockImplementation(() => {});
     contentScriptSends({ type: "state_update", muted: true }, fromTab(1));
     port.postMessage.mockClear();
     givenMeetTabs([{ id: 1 }]);
