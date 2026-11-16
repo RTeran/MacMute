@@ -5,6 +5,8 @@ struct ShortcutConfigView: View {
     @State private var isRecordingMic = false
     @State private var isRecordingCamera = false
     @State private var showColorSettings = false
+    @State private var micRecordingMonitor: Any?
+    @State private var cameraRecordingMonitor: Any?
 
     var body: some View {
         VStack(spacing: 12) {
@@ -90,10 +92,30 @@ struct ShortcutConfigView: View {
         .padding()
         .frame(width: 280)
         .fixedSize(horizontal: false, vertical: true)
+        .onChange(of: isRecordingMic) { isRecording in
+            if !isRecording { removeMonitor(&micRecordingMonitor) }
+        }
+        .onChange(of: isRecordingCamera) { isRecording in
+            if !isRecording { removeMonitor(&cameraRecordingMonitor) }
+        }
+        .onDisappear {
+            isRecordingMic = false
+            isRecordingCamera = false
+            removeMonitor(&micRecordingMonitor)
+            removeMonitor(&cameraRecordingMonitor)
+        }
+    }
+
+    private func removeMonitor(_ monitor: inout Any?) {
+        if let existing = monitor {
+            NSEvent.removeMonitor(existing)
+        }
+        monitor = nil
     }
 
     private func startRecordingMic() {
-        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        removeMonitor(&micRecordingMonitor)
+        micRecordingMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             guard self.isRecordingMic else { return event }
 
             var parts: [String] = []
@@ -120,7 +142,8 @@ struct ShortcutConfigView: View {
     }
 
     private func startRecordingCamera() {
-        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        removeMonitor(&cameraRecordingMonitor)
+        cameraRecordingMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             guard self.isRecordingCamera else { return event }
 
             var parts: [String] = []
