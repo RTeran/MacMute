@@ -270,6 +270,36 @@ final class SocketServerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: socketPath))
     }
 
+    func testBuildsTheAddressOfTheLongestPathThatFits() throws {
+        let path = "/" + String(repeating: "a", count: 102)
+
+        var address = try SocketServer.socketAddress(for: path).get()
+
+        let stored = withUnsafeBytes(of: &address.sun_path) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
+        XCTAssertEqual(stored, path)
+    }
+
+    func testRefusesAPathLongerThanASocketAddressHolds() {
+        let path = "/" + String(repeating: "a", count: 103)
+
+        let result = SocketServer.socketAddress(for: path)
+
+        guard case .failure(.pathTooLong(length: 104, maximum: 103)) = result else {
+            return XCTFail("Expected pathTooLong, got \(result)")
+        }
+    }
+
+    func testDoesNotTouchTheFileSystemWhenTheSocketPathIsTooLong() throws {
+        server.stop()
+        try FileManager.default.removeItem(at: socketDirectory)
+        socketPath = socketDirectory.appendingPathComponent(String(repeating: "a", count: 120)).path
+        startServer()
+
+        server.stop()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: socketDirectory.path))
+    }
+
     func testDoesNotListenWhenTheTrustedRequirementCannotBeBuilt() {
         server.stop()
         startServer(maxClients: 1, makeVerifyPeer: { .failure(.ownSignatureUnavailable(errSecCSUnsigned)) })

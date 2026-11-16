@@ -121,6 +121,17 @@ class SocketServer {
         return "\(nsError.domain) \(nsError.code)\(underlying)"
     }
 
+    /// Fails instead of truncating: a truncated path would bind or connect somewhere else.
+    static func socketAddress(for path: String) -> Result<sockaddr_un, SocketPathError> {
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let bytes = Array(path.utf8)
+        let maximum = MemoryLayout.size(ofValue: address.sun_path) - 1
+        guard bytes.count <= maximum else { return .failure(.pathTooLong(length: bytes.count, maximum: maximum)) }
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: bytes) }
+        return .success(address)
+    }
+
     // The full path contains the user name.
     private var socketName: String { (socketPath as NSString).lastPathComponent }
 
@@ -202,6 +213,14 @@ class SocketServer {
     }
 
     private func startServer() {
+        let address: sockaddr_un
+        switch Self.socketAddress(for: socketPath) {
+        case let .success(built):
+            address = built
+        case let .failure(error):
+            logger.fault("Not starting the socket server: \(error.description, privacy: .public)")
+            return
+        }
         let directory = URL(fileURLWithPath: socketPath).deletingLastPathComponent()
         do {
             try Self.prepareDirectory(directory)
@@ -226,18 +245,10 @@ class SocketServer {
             return
         }
 
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-
-        let bindResult = withUnsafeMutablePointer(to: &addr) { addrPtr in
-            socketPath.withCString { ptr in
-                let sunPathOffset = MemoryLayout<sockaddr_un>.offset(of: \sockaddr_un.sun_path)!
-                let sunPath = UnsafeMutableRawPointer(addrPtr).advanced(by: sunPathOffset)
-                    .assumingMemoryBound(to: CChar.self)
-                strncpy(sunPath, ptr, 104 - 1)
-            }
-            return addrPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
-                bind(serverSocket, sockaddrPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
+        var addr = address
+        let bindResult = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(serverSocket, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
 
@@ -373,6 +384,17 @@ class SocketServer {
         client.readSource.cancel()
         DispatchQueue.main.async { [weak self] in
             self?.onClientDisconnected?(id)
+        }
+    }
+}
+
+enum SocketPathError: Error, Equatable, CustomStringConvertible {
+    case pathTooLong(length: Int, maximum: Int)
+
+    var description: String {
+        switch self {
+        case let .pathTooLong(length, maximum):
+            return "the socket path is \(length) bytes long; a socket address holds at most \(maximum)"
         }
     }
 }
