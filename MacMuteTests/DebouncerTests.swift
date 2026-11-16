@@ -4,18 +4,20 @@ final class DebouncerTests: XCTestCase {
     private let queue = DispatchQueue(label: "DebouncerTests")
 
     func testRunsOnlyTheLastActionOfABurst() {
-        let debouncer = Debouncer(delay: 0.05, queue: queue)
+        let debouncer = Debouncer(delay: 0.4, queue: queue)
         let ran = expectation(description: "last action runs")
         var values: [Int] = []
 
-        for value in 1...5 {
-            debouncer.schedule {
-                values.append(value)
-                if value == 5 { ran.fulfill() }
+        queue.sync {
+            for value in 1...5 {
+                debouncer.schedule {
+                    values.append(value)
+                    if value == 5 { ran.fulfill() }
+                }
             }
         }
 
-        wait(for: [ran], timeout: 2)
+        wait(for: [ran], timeout: 3)
         queue.sync {}
         XCTAssertEqual(values, [5])
     }
@@ -23,9 +25,10 @@ final class DebouncerTests: XCTestCase {
     func testFlushRunsThePendingActionOnceAndRightAway() {
         let debouncer = Debouncer(delay: 0.2, queue: queue)
         var runs = 0
-        debouncer.schedule { runs += 1 }
-
-        debouncer.flush()
+        queue.sync {
+            debouncer.schedule { runs += 1 }
+            debouncer.flush()
+        }
         XCTAssertEqual(runs, 1)
 
         let waited = expectation(description: "delay elapsed")
@@ -34,13 +37,32 @@ final class DebouncerTests: XCTestCase {
         XCTAssertEqual(runs, 1)
     }
 
-    func testFlushDoesNothingWithoutAPendingAction() {
+    func testASecondFlushDoesNotRunTheActionAgain() {
         let debouncer = Debouncer(delay: 0.05, queue: queue)
         var runs = 0
-        debouncer.schedule { runs += 1 }
-        debouncer.flush()
 
-        debouncer.flush()
+        queue.sync {
+            debouncer.schedule { runs += 1 }
+            debouncer.flush()
+            debouncer.flush()
+        }
+
+        XCTAssertEqual(runs, 1)
+    }
+
+    func testFlushAfterTheTimerFiredDoesNotRunTheActionAgain() {
+        let debouncer = Debouncer(delay: 0.05, queue: queue)
+        let ran = expectation(description: "timer fired")
+        var runs = 0
+        queue.sync {
+            debouncer.schedule {
+                runs += 1
+                ran.fulfill()
+            }
+        }
+        wait(for: [ran], timeout: 2)
+
+        queue.sync { debouncer.flush() }
 
         XCTAssertEqual(runs, 1)
     }

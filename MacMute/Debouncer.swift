@@ -11,6 +11,7 @@ final class Debouncer {
     }
 
     func schedule(_ action: @escaping () -> Void) {
+        dispatchPrecondition(condition: .onQueue(queue))
         pending?.item.cancel()
         let item = DispatchWorkItem { [weak self] in
             self?.pending = nil
@@ -21,6 +22,7 @@ final class Debouncer {
     }
 
     func flush() {
+        dispatchPrecondition(condition: .onQueue(queue))
         guard let pending else { return }
         self.pending = nil
         pending.item.cancel()
