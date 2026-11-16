@@ -406,6 +406,18 @@ final class SocketServerTests: XCTestCase {
         _ = connectHelper()
     }
 
+    func testStartingARunningServerAgainKeepsItsSocket() throws {
+        _ = connectHelper()
+        let socketInode = try inode(of: socketPath)
+
+        server.start()
+        waitLongerThanARetry()
+
+        XCTAssertEqual(states, [.listening])
+        XCTAssertEqual(try inode(of: socketPath), socketInode)
+        _ = connectHelper()
+    }
+
     func testANewServerStartsOnceTheFirstOneStops() {
         server.stop()
 
