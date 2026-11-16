@@ -329,6 +329,40 @@ final class SocketServerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: socketPath))
     }
 
+    func testASecondServerOnTheSamePathLeavesTheFirstOneListening() throws {
+        server.stop()
+        startServer { _ in .failure(.requirementNotSatisfied(errSecCSReqFailed)) }
+        XCTAssertTrue(waitForEndOfStream(on: rawConnect()))
+        let firstSocket = try inode(of: socketPath)
+
+        let second = SocketServer(socketPath: socketPath, makeVerifyPeer: { .success { _ in .success(()) } })
+        let reported = expectation(description: "second server state")
+        var secondStates: [SocketServerState] = []
+        second.onStateChange = { secondStates.append($0); reported.fulfill() }
+        second.start()
+        wait(for: [reported], timeout: 2)
+        second.stop()
+
+        XCTAssertEqual(secondStates, [.anotherInstanceRunning])
+        XCTAssertEqual(try inode(of: socketPath), firstSocket)
+        XCTAssertTrue(waitForEndOfStream(on: rawConnect()))
+    }
+
+    func testReplacesAStaleSocketLeftByAServerThatIsGone() throws {
+        server.stop()
+        let stale = socket(AF_UNIX, SOCK_STREAM, 0)
+        defer { close(stale) }
+        var address = try SocketServer.socketAddress(for: socketPath).get()
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(stale, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        }
+        XCTAssertEqual(bound, 0)
+
+        startServer()
+
+        _ = connectHelper()
+    }
+
     func testStoppingLeavesAFileThatReplacedItsSocket() {
         _ = connectHelper()
         unlink(socketPath)
@@ -467,6 +501,12 @@ final class SocketServerTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    private func inode(of path: String) throws -> ino_t {
+        var info = stat()
+        guard lstat(path, &info) == 0 else { throw POSIXError(.ENOENT) }
+        return info.st_ino
+    }
 
     private func adHocCode() -> Result<SecStaticCode, PeerVerificationError> {
         var code: SecStaticCode?

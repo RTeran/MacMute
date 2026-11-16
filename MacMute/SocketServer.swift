@@ -8,6 +8,12 @@ enum SocketSendError: String, Error {
     case appShuttingDown = "app_shutting_down"
 }
 
+enum SocketServerState: Equatable {
+    case listening
+    /// Another MacMute already serves the socket; this server leaves it alone.
+    case anotherInstanceRunning
+}
+
 /// Identifies one connected helper, one per Chrome profile. Never reused while the server runs.
 typealias ClientID = Int
 
@@ -43,6 +49,7 @@ class SocketServer {
     var onMessageReceived: ((ClientID, [String: Any]) -> Void)?
     var onClientConnected: ((ClientID) -> Void)?
     var onClientDisconnected: ((ClientID) -> Void)?
+    var onStateChange: ((SocketServerState) -> Void)?
 
     /// Only accepts helpers this app trusts; see `PeerCodeVerifier.trustedHelperRequirement`.
     convenience init() {
@@ -236,20 +243,23 @@ class SocketServer {
             return
         }
 
-        // Remove existing socket file
-        unlink(socketPath)
-
         serverSocket = socket(AF_UNIX, SOCK_STREAM, 0)
         guard serverSocket >= 0 else {
             logger.error("Failed to create socket: \(String(cString: strerror(errno)), privacy: .public)")
             return
         }
 
-        var addr = address
-        let bindResult = withUnsafePointer(to: &addr) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                bind(serverSocket, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+        var bindResult = Self.bind(serverSocket, to: address)
+        if bindResult != 0 && errno == EADDRINUSE {
+            // Probed before unlinking, so a second instance never takes the socket of a running one.
+            if Self.someoneListens(at: address) {
+                logger.error("Not starting the socket server: another MacMute is already listening on \(self.socketName, privacy: .public)")
+                abortStart()
+                report(.anotherInstanceRunning)
+                return
             }
+            unlink(socketPath)
+            bindResult = Self.bind(serverSocket, to: address)
         }
 
         guard bindResult == 0 else {
@@ -278,6 +288,7 @@ class SocketServer {
         }
 
         logger.notice("Socket server listening on \(self.socketName, privacy: .public)")
+        report(.listening)
 
         let listeningSocket = serverSocket
         let source = DispatchSource.makeReadSource(fileDescriptor: listeningSocket, queue: queue)
@@ -289,6 +300,33 @@ class SocketServer {
         }
         source.resume()
         self.listenSource = source
+    }
+
+    private static func bind(_ fd: Int32, to address: sockaddr_un) -> Int32 {
+        var address = address
+        return withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+    }
+
+    private static func someoneListens(at address: sockaddr_un) -> Bool {
+        let probe = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard probe >= 0 else { return false }
+        defer { close(probe) }
+        var address = address
+        return withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(probe, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) == 0
+            }
+        }
+    }
+
+    private func report(_ state: SocketServerState) {
+        DispatchQueue.main.async { [weak self] in
+            self?.onStateChange?(state)
+        }
     }
 
     private func abortStart() {
