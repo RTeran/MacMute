@@ -198,3 +198,66 @@ final class ShortcutShiftOnlyTests: XCTestCase {
         XCTAssertFalse(Shortcut(keyCode: 46, modifiers: [.maskCommand]).usesShiftAsOnlyModifier)
     }
 }
+
+final class ShortcutRecordingTests: XCTestCase {
+    private let micShortcut = Shortcut(keyCode: 46, modifiers: [.maskCommand, .maskShift])
+    private let cameraShortcut = Shortcut(keyCode: 8, modifiers: [.maskControl])
+    private var matcher: ShortcutMatcher!
+
+    override func setUp() {
+        super.setUp()
+        matcher = ShortcutMatcher(mic: micShortcut, camera: cameraShortcut)
+    }
+
+    func testPassesTheShortcutWhileSuspendedForRecording() {
+        matcher.isSuspended = true
+        let event = CGEvent(keyboardEventSource: nil, virtualKey: 46, keyDown: true)!
+        event.flags = [.maskCommand, .maskShift]
+
+        XCTAssertEqual(matcher.action(for: event), .pass)
+    }
+
+    func testPassesAnAutorepeatOfTheShortcutWhileSuspended() {
+        matcher.isSuspended = true
+        let event = CGEvent(keyboardEventSource: nil, virtualKey: 46, keyDown: true)!
+        event.flags = [.maskCommand, .maskShift]
+        event.setIntegerValueField(.keyboardEventAutorepeat, value: 1)
+
+        XCTAssertEqual(matcher.action(for: event), .pass)
+    }
+
+    func testReportsTheOtherTargetWhenTheCombinationIsTaken() {
+        XCTAssertEqual(matcher.conflict(for: micShortcut, recording: .camera), .mic)
+        XCTAssertEqual(matcher.conflict(for: cameraShortcut, recording: .mic), .camera)
+    }
+
+    func testIgnoresFlagsThatAreNotShortcutModifiersWhenLookingForConflicts() {
+        let candidate = Shortcut(keyCode: 46, modifiers: [.maskCommand, .maskShift, .maskAlphaShift])
+
+        XCTAssertEqual(matcher.conflict(for: candidate, recording: .camera), .mic)
+    }
+
+    func testDoesNotReportAConflictForADifferentCombination() {
+        let sameKeyOtherModifiers = Shortcut(keyCode: 46, modifiers: [.maskCommand])
+        let otherKeySameModifiers = Shortcut(keyCode: 47, modifiers: [.maskCommand, .maskShift])
+
+        XCTAssertNil(matcher.conflict(for: sameKeyOtherModifiers, recording: .camera))
+        XCTAssertNil(matcher.conflict(for: otherKeySameModifiers, recording: .camera))
+    }
+
+    func testDoesNotReportAConflictWithTheShortcutBeingReRecorded() {
+        XCTAssertNil(matcher.conflict(for: micShortcut, recording: .mic))
+    }
+
+    func testDoesNotReportAConflictWhenTheOtherShortcutIsNotConfigured() {
+        let micOnly = ShortcutMatcher(mic: micShortcut, camera: nil)
+
+        XCTAssertNil(micOnly.conflict(for: cameraShortcut, recording: .mic))
+    }
+
+    func testBuildsAShortcutFromRecordedModifierFlags() {
+        let shortcut = Shortcut(keyCode: 46, modifierFlags: [.command, .shift, .capsLock])
+
+        XCTAssertEqual(shortcut, Shortcut(keyCode: 46, modifiers: [.maskCommand, .maskShift]))
+    }
+}

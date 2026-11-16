@@ -5,6 +5,8 @@ struct ShortcutConfigView: View {
     @State private var isRecordingMic = false
     @State private var isRecordingCamera = false
     @State private var showColorSettings = false
+    @State private var micConflictMessage: String?
+    @State private var cameraConflictMessage: String?
     @State private var micRecordingMonitor: Any?
     @State private var cameraRecordingMonitor: Any?
 
@@ -33,6 +35,7 @@ struct ShortcutConfigView: View {
                 defaultsKey: "globalShortcut",
                 keyCodeKey: "shortcutKeyCode",
                 modifiersKey: "shortcutModifiers",
+                conflictMessage: micConflictMessage,
                 onRecord: { startRecordingMic() }
             )
 
@@ -54,6 +57,7 @@ struct ShortcutConfigView: View {
                 defaultsKey: "cameraShortcut",
                 keyCodeKey: "cameraShortcutKeyCode",
                 modifiersKey: "cameraShortcutModifiers",
+                conflictMessage: cameraConflictMessage,
                 onRecord: { startRecordingCamera() }
             )
 
@@ -94,16 +98,36 @@ struct ShortcutConfigView: View {
         .fixedSize(horizontal: false, vertical: true)
         .onChange(of: isRecordingMic) { isRecording in
             if !isRecording { removeMonitor(&micRecordingMonitor) }
+            updateGlobalShortcutSuspension()
         }
         .onChange(of: isRecordingCamera) { isRecording in
             if !isRecording { removeMonitor(&cameraRecordingMonitor) }
+            updateGlobalShortcutSuspension()
         }
-        .onDisappear {
-            isRecordingMic = false
-            isRecordingCamera = false
-            removeMonitor(&micRecordingMonitor)
-            removeMonitor(&cameraRecordingMonitor)
+        .onDisappear { endRecording() }
+        // onDisappear is not guaranteed when the transient popover closes, and a recording left
+        // running would keep the global shortcuts suspended.
+        .onReceive(NotificationCenter.default.publisher(for: NSPopover.willCloseNotification)) { _ in
+            endRecording()
         }
+        // Switching apps can leave the transient popover open but unable to receive keys.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            endRecording()
+        }
+    }
+
+    private func endRecording() {
+        isRecordingMic = false
+        isRecordingCamera = false
+        removeMonitor(&micRecordingMonitor)
+        removeMonitor(&cameraRecordingMonitor)
+        GlobalShortcutManager.shared.setShortcutsSuspended(false)
+    }
+
+    // The global event tap sees key events before this view's local monitor, so it must let
+    // them through while a shortcut is being recorded.
+    private func updateGlobalShortcutSuspension() {
+        GlobalShortcutManager.shared.setShortcutsSuspended(isRecordingMic || isRecordingCamera)
     }
 
     private func removeMonitor(_ monitor: inout Any?) {
@@ -113,7 +137,15 @@ struct ShortcutConfigView: View {
         monitor = nil
     }
 
+    private func conflictMessage(for shortcut: String, event: NSEvent, recording target: ToggleTarget) -> String? {
+        let candidate = Shortcut(keyCode: event.keyCode, modifierFlags: event.modifierFlags)
+        guard let other = GlobalShortcutManager.shared.conflict(for: candidate, recording: target) else { return nil }
+        let otherName = other == .mic ? "mic" : "camera"
+        return "\(shortcut) is already used for the \(otherName) shortcut."
+    }
+
     private func startRecordingMic() {
+        micConflictMessage = nil
         removeMonitor(&micRecordingMonitor)
         micRecordingMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             guard self.isRecordingMic else { return event }
@@ -130,6 +162,12 @@ struct ShortcutConfigView: View {
 
             if parts.count >= 2 {
                 let shortcut = parts.joined()
+                if let message = self.conflictMessage(for: shortcut, event: event, recording: .mic) {
+                    self.micConflictMessage = message
+                    self.isRecordingMic = false
+                    return nil
+                }
+                self.cameraConflictMessage = nil
                 UserDefaults.standard.set(shortcut, forKey: "globalShortcut")
                 UserDefaults.standard.set(Int(event.keyCode), forKey: "shortcutKeyCode")
                 UserDefaults.standard.set(event.modifierFlags.rawValue, forKey: "shortcutModifiers")
@@ -142,6 +180,7 @@ struct ShortcutConfigView: View {
     }
 
     private func startRecordingCamera() {
+        cameraConflictMessage = nil
         removeMonitor(&cameraRecordingMonitor)
         cameraRecordingMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             guard self.isRecordingCamera else { return event }
@@ -158,6 +197,12 @@ struct ShortcutConfigView: View {
 
             if parts.count >= 2 {
                 let shortcut = parts.joined()
+                if let message = self.conflictMessage(for: shortcut, event: event, recording: .camera) {
+                    self.cameraConflictMessage = message
+                    self.isRecordingCamera = false
+                    return nil
+                }
+                self.micConflictMessage = nil
                 UserDefaults.standard.set(shortcut, forKey: "cameraShortcut")
                 UserDefaults.standard.set(Int(event.keyCode), forKey: "cameraShortcutKeyCode")
                 UserDefaults.standard.set(event.modifierFlags.rawValue, forKey: "cameraShortcutModifiers")
@@ -228,6 +273,7 @@ private struct ShortcutRow: View {
     let defaultsKey: String
     let keyCodeKey: String
     let modifiersKey: String
+    let conflictMessage: String?
     let onRecord: () -> Void
 
     var body: some View {
@@ -256,6 +302,13 @@ private struct ShortcutRow: View {
                     }
                 }
                 .buttonStyle(.bordered)
+            }
+
+            if let conflictMessage, !isRecording {
+                Label(conflictMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if showsShiftOnlyWarning {

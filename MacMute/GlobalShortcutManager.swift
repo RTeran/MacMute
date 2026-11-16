@@ -8,6 +8,18 @@ struct Shortcut: Equatable {
     var usesShiftAsOnlyModifier: Bool {
         modifiers.intersection(ShortcutMatcher.relevantModifiers) == .maskShift
     }
+
+    func hasSameCombination(as other: Shortcut) -> Bool {
+        keyCode == other.keyCode
+            && modifiers.intersection(ShortcutMatcher.relevantModifiers)
+                == other.modifiers.intersection(ShortcutMatcher.relevantModifiers)
+    }
+}
+
+extension Shortcut {
+    init(keyCode: UInt16, modifierFlags: NSEvent.ModifierFlags) {
+        self.init(keyCode: keyCode, modifiers: ShortcutStore.cgFlags(from: Int(modifierFlags.rawValue)))
+    }
 }
 
 enum ShortcutMatch: Equatable {
@@ -36,13 +48,22 @@ struct ShortcutMatcher {
 
     var mic: Shortcut?
     var camera: Shortcut?
+    var isSuspended = false
 
     func action(for event: CGEvent) -> ShortcutEventAction {
         match(event).action
     }
 
+    func conflict(for candidate: Shortcut, recording target: ToggleTarget) -> ToggleTarget? {
+        let other: ToggleTarget = target == .mic ? .camera : .mic
+        let otherShortcut = other == .mic ? mic : camera
+        guard let otherShortcut, otherShortcut.hasSameCombination(as: candidate) else { return nil }
+        return other
+    }
+
     func match(_ event: CGEvent) -> ShortcutMatch {
-        match(
+        guard !isSuspended else { return .none }
+        return match(
             keyCode: UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode)),
             flags: event.flags,
             isAutorepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0
@@ -89,7 +110,7 @@ enum ShortcutStore {
         return .configured(Shortcut(keyCode: validKeyCode, modifiers: modifiers))
     }
 
-    private static func cgFlags(from modifiersRaw: Int) -> CGEventFlags {
+    static func cgFlags(from modifiersRaw: Int) -> CGEventFlags {
         let nsFlags = NSEvent.ModifierFlags(rawValue: UInt(modifiersRaw))
         var cgFlags: CGEventFlags = []
         if nsFlags.contains(.command) { cgFlags.insert(.maskCommand) }
@@ -181,6 +202,16 @@ class GlobalShortcutManager {
         }
         eventTap = nil
         runLoopSource = nil
+    }
+
+    func setShortcutsSuspended(_ suspended: Bool) {
+        guard matcher.isSuspended != suspended else { return }
+        matcher.isSuspended = suspended
+        logger.notice("Global shortcuts \(suspended ? "suspended" : "resumed", privacy: .public)")
+    }
+
+    func conflict(for candidate: Shortcut, recording target: ToggleTarget) -> ToggleTarget? {
+        matcher.conflict(for: candidate, recording: target)
     }
 
     func updateShortcut() {
