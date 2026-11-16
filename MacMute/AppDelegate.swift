@@ -53,7 +53,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try fileManager.createDirectory(at: chromeNMHDir, withIntermediateDirectories: true)
         } catch {
-            logger.error("Failed to create the NativeMessagingHosts directory: \(error.localizedDescription)")
+            logger.error("Failed to create the NativeMessagingHosts directory: \(SocketServer.errorCode(error), privacy: .public)")
             return false
         }
 
@@ -97,7 +97,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             logger.notice("Installed the native messaging manifest at \(manifestPath.path) for the helper at \(helperPath)")
             return true
         } catch {
-            logger.error("Failed to write the native messaging manifest: \(error.localizedDescription)")
+            logger.error("Failed to write the native messaging manifest: \(SocketServer.errorCode(error), privacy: .public)")
             return false
         }
     }

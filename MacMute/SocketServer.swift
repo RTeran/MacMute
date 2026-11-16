@@ -143,7 +143,7 @@ class SocketServer {
     }
 
     // NSError descriptions carry the full path, which contains the user name.
-    private static func errorCode(_ error: Error) -> String {
+    static func errorCode(_ error: Error) -> String {
         let nsError = error as NSError
         let underlying = (nsError.userInfo[NSUnderlyingErrorKey] as? NSError).map { ", \($0.domain) \($0.code)" } ?? ""
         return "\(nsError.domain) \(nsError.code)\(underlying)"
