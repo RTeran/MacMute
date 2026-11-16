@@ -136,7 +136,7 @@ Build a universal app, sign it and package both downloads into `dist/`:
 
 ```bash
 ./scripts/release.sh
-gh release create vX.Y dist/MacMute-app.zip dist/MacMute-chrome-extension.zip
+gh release create vX.Y dist/MacMute-app.zip dist/MacMute-chrome-extension.zip dist/SHA256SUMS.txt
 ```
 
 To sign with another identity, set `MACMUTE_SIGNING_IDENTITY`.

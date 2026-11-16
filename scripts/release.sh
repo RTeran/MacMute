@@ -32,6 +32,7 @@ ditto -c -k --keepParent "$APP" "$DIST/MacMute-app.zip"
 cp -R chrome-extension "$DIST/MacMute-chrome-extension"
 find "$DIST/MacMute-chrome-extension" -name .DS_Store -delete
 (cd "$DIST" && zip -qr MacMute-chrome-extension.zip MacMute-chrome-extension && rm -rf MacMute-chrome-extension)
+(cd "$DIST" && shasum -a 256 MacMute-app.zip MacMute-chrome-extension.zip > SHA256SUMS.txt)
 
 echo "Release files in $DIST:"
 ls -1 "$DIST"
