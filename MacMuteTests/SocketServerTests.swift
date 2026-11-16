@@ -486,6 +486,16 @@ final class PeerRejectionLogTests: XCTestCase {
         XCTAssertEqual(other.level, .error)
     }
 
+    func testReportsEveryRejectionOfAnUnknownProcessAsAnError() {
+        var log = PeerRejectionLog()
+
+        let first = log.entry(for: .peerCodeUnavailable(-1), pid: nil)
+        let second = log.entry(for: .peerCodeUnavailable(-1), pid: nil)
+
+        XCTAssertEqual(first.level, .error)
+        XCTAssertEqual(second.level, .error)
+    }
+
     func testNamesTheProcessAndTheReason() {
         var log = PeerRejectionLog()
 

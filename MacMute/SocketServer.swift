@@ -381,9 +381,9 @@ struct PeerRejectionLog {
     private var reported: Set<pid_t> = []
 
     mutating func entry(for error: PeerVerificationError, pid: pid_t?) -> (level: OSLogType, message: String) {
-        let key = pid ?? -1
         if reported.count >= Self.maxRemembered { reported.removeAll() }
-        let isFirst = reported.insert(key).inserted
+        // Unknown processes cannot be told apart, so each rejection is reported.
+        let isFirst = pid.map { reported.insert($0).inserted } ?? true
         var message = "Rejecting peer pid \(pid.map(String.init) ?? "unknown"): \(error.description)"
         if case .requirementNotSatisfied = error {
             message += ". If it is the MacMute helper of another build, reload the MacMute extension in Chrome."
