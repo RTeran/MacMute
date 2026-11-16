@@ -181,7 +181,7 @@ final class ToggleConfirmation {
         confirmationTimers[target] = schedule(.confirmation, confirmationTimeouts.timeout(for: target)) { [weak self] in
             self?.fail(target, requestId: requestId, reason: "timeout")
         }
-        logger.debug("Toggle \(target.rawValue, privacy: .public) sent, request \(requestId, privacy: .public), expected \(String(describing: toggle.expected), privacy: .public)")
+        logger.debug("Toggle \(target.rawValue, privacy: .public) sent, request \(preview(requestId), privacy: .public), expected \(String(describing: toggle.expected), privacy: .public)")
 
         send(target, requestId) { [weak self] outcome in
             if case let .failed(reason) = outcome {
@@ -197,7 +197,7 @@ final class ToggleConfirmation {
             fail(target, requestId: requestId, reason: reason)
 
         case let (.failed(reason), nil):
-            logger.warning("toggle_result failure for \(target.rawValue, privacy: .public) without requestId (\(reason, privacy: .public)), not matched to a pending toggle")
+            logger.warning("toggle_result failure for \(target.rawValue, privacy: .public) without requestId (\(preview(reason), privacy: .public)), not matched to a pending toggle")
 
         case let (.confirmed(newState), requestId?):
             if let toggle = pendingToggles.resolve(target, requestId: requestId) {
@@ -207,7 +207,7 @@ final class ToggleConfirmation {
                     unconfirm(target, toggle, reason: "unexpected_state", source: result.source)
                 }
             } else {
-                logger.notice("toggle_result for already resolved \(target.rawValue, privacy: .public) request \(requestId, privacy: .public), source \(result.source ?? "unknown", privacy: .public)")
+                logger.notice("toggle_result for already resolved \(target.rawValue, privacy: .public) request \(preview(requestId), privacy: .public), source \(preview(result.source ?? "unknown"), privacy: .public)")
             }
             // A late success after the timeout still carries the real state.
             endUnconfirmedFeedback(for: target, reached: newState)
@@ -239,16 +239,16 @@ final class ToggleConfirmation {
         _ target: ToggleTarget, _ toggle: PendingToggleTracker.Pending, newState: Bool, source: String
     ) {
         confirmationTimers.removeValue(forKey: target)?.cancel()
-        logger.notice("Toggle \(target.rawValue, privacy: .public) confirmed by \(source, privacy: .public), request \(toggle.requestId, privacy: .public)")
+        logger.notice("Toggle \(target.rawValue, privacy: .public) confirmed by \(preview(source), privacy: .public), request \(preview(toggle.requestId), privacy: .public)")
         onConfirmed?(target, newState)
     }
 
     private func fail(_ target: ToggleTarget, requestId: String, reason: String) {
         guard let toggle = pendingToggles.resolve(target, requestId: requestId) else {
             if unconfirmed?.toggle.requestId == requestId {
-                logger.error("Toggle \(target.rawValue, privacy: .public) already unconfirmed; real reason \(reason, privacy: .public), request \(requestId, privacy: .public)")
+                logger.error("Toggle \(target.rawValue, privacy: .public) already unconfirmed; real reason \(preview(reason), privacy: .public), request \(preview(requestId), privacy: .public)")
             } else {
-                logger.notice("Ignoring stale \(target.rawValue, privacy: .public) failure (\(reason, privacy: .public)), request \(requestId, privacy: .public)")
+                logger.notice("Ignoring stale \(target.rawValue, privacy: .public) failure (\(preview(reason), privacy: .public)), request \(preview(requestId), privacy: .public)")
             }
             return
         }
@@ -259,7 +259,7 @@ final class ToggleConfirmation {
         _ target: ToggleTarget, _ toggle: PendingToggleTracker.Pending, reason: String, source: String? = nil
     ) {
         confirmationTimers.removeValue(forKey: target)?.cancel()
-        logger.error("Toggle \(target.rawValue, privacy: .public) unconfirmed (\(reason, privacy: .public)), source \(source ?? "none", privacy: .public), request \(toggle.requestId, privacy: .public)")
+        logger.error("Toggle \(target.rawValue, privacy: .public) unconfirmed (\(preview(reason), privacy: .public)), source \(preview(source ?? "none"), privacy: .public), request \(preview(toggle.requestId), privacy: .public)")
         startUnconfirmedFeedback(for: target, toggle)
     }
 

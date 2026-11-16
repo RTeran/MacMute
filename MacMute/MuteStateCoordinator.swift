@@ -65,6 +65,11 @@ final class MuteStateCoordinator {
     }
 
     func toggle(_ target: ToggleTarget) {
+        if toggleConfirmation.pendingToggles.pending[target] != nil,
+           let previous = router.toggleRecipient(for: target), previous != router.selected {
+            // The previous press can no longer be confirmed: only the new recipient's replies count.
+            logger.notice("New \(target.rawValue, privacy: .public) press replaces one pending on helper \(previous, privacy: .public), sent to helper \(String(describing: self.router.selected), privacy: .public)")
+        }
         toggleConfirmation.toggle(target)
     }
 
@@ -103,7 +108,7 @@ final class MuteStateCoordinator {
         case "toggle_result":
             handleToggleResult(message, from: helper)
         default:
-            logger.error("Unknown message type from helper \(helper, privacy: .public): \(type, privacy: .public)")
+            logger.error("Unknown message type from helper \(helper, privacy: .public): \(preview(type), privacy: .public)")
         }
     }
 
@@ -128,7 +133,7 @@ final class MuteStateCoordinator {
             return
         }
         if result.outcome == .failed(reason: "missing_state") {
-            logger.error("toggle_result ok without state: \(String(describing: message), privacy: .public)")
+            logger.error("toggle_result ok without state: \(preview(message), privacy: .public)")
         }
         toggleConfirmation.handle(result)
     }
@@ -160,6 +165,6 @@ final class MuteStateCoordinator {
     }
 
     private func logMalformed(_ message: [String: Any], from helper: ClientID) {
-        logger.error("Malformed message from helper \(helper, privacy: .public): \(String(describing: message), privacy: .public)")
+        logger.error("Malformed message from helper \(helper, privacy: .public): \(preview(message), privacy: .public)")
     }
 }
