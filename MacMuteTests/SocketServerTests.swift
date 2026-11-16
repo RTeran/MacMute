@@ -277,6 +277,22 @@ final class SocketServerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: victim.path))
     }
 
+    func testRefusingASymbolicLinkLeavesThePermissionsOfItsTargetAlone() throws {
+        let target = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("mm-target-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o755])
+        let link = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("mm-link-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        defer {
+            try? FileManager.default.removeItem(at: link)
+            try? FileManager.default.removeItem(at: target)
+        }
+
+        XCTAssertThrowsError(try SocketServer.prepareDirectory(link))
+
+        let mode = try FileManager.default.attributesOfItem(atPath: target.path)[.posixPermissions] as? NSNumber
+        XCTAssertEqual(mode?.intValue, 0o755)
+    }
+
     func testRefusesASocketDirectoryThatIsNotADirectory() throws {
         let file = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("mm-file-\(UUID().uuidString)")
         XCTAssertTrue(FileManager.default.createFile(atPath: file.path, contents: Data()))

@@ -83,11 +83,19 @@ class SocketServer {
         } catch {
             throw SocketDirectoryError.operationFailed("createDirectory", Self.errorCode(error))
         }
+        // Checked before setAttributes, which follows symbolic links.
+        try checkOwnDirectory(url)
         do {
             try FileManager.default.setAttributes(ownerOnly, ofItemAtPath: url.path)
         } catch {
             throw SocketDirectoryError.operationFailed("setAttributes", Self.errorCode(error))
         }
+        let info = try checkOwnDirectory(url)
+        guard info.st_mode & 0o077 == 0 else { throw SocketDirectoryError.accessibleByOthers(info.st_mode & 0o777) }
+    }
+
+    @discardableResult
+    private static func checkOwnDirectory(_ url: URL) throws -> stat {
         var info = stat()
         guard lstat(url.path, &info) == 0 else {
             throw SocketDirectoryError.operationFailed("lstat", String(cString: strerror(errno)))
@@ -96,7 +104,7 @@ class SocketServer {
         guard type != S_IFLNK else { throw SocketDirectoryError.symbolicLink }
         guard type == S_IFDIR else { throw SocketDirectoryError.notADirectory }
         guard info.st_uid == getuid() else { throw SocketDirectoryError.ownedByAnotherUser(info.st_uid) }
-        guard info.st_mode & 0o077 == 0 else { throw SocketDirectoryError.accessibleByOthers(info.st_mode & 0o777) }
+        return info
     }
 
     // NSError descriptions carry the full path, which contains the user name.
