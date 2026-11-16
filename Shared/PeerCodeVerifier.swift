@@ -40,7 +40,7 @@ enum PeerCodeVerifier {
     static let helperIdentifier = "com.macmute.helper"
 
     /// The on-disk copy decides what is trusted, so it is used only after the running code has been
-    /// checked against it. The checked SecCode keeps that copy, so replacing the file later changes nothing.
+    /// checked against it.
     static func ownStaticCode() -> Result<SecStaticCode, PeerVerificationError> {
         var code: SecCode?
         var status = SecCodeCopySelf([], &code)

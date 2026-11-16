@@ -213,7 +213,7 @@ class SocketServer {
         case let .success(verify):
             verifyPeer = verify
         case let .failure(error):
-            logger.fault("Not starting the socket server: cannot build the trusted helper requirement: \(error.description, privacy: .public)")
+            logger.fault("Not starting the socket server: \(error.description, privacy: .public)")
             return
         }
 

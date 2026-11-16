@@ -259,6 +259,17 @@ final class SocketServerTests: XCTestCase {
         XCTAssertEqual(builds, 1)
     }
 
+    func testDoesNotListenWhenTheAppSignatureDoesNotMatchTheRunningCode() throws {
+        server.stop()
+        let app = try appBundle(withHelper: true)
+        startServer(maxClients: 1, makeVerifyPeer: SocketServer.trustedHelperCheck(appBundle: app) {
+            .failure(.ownSignatureInvalid(errSecCSStaticCodeChanged))
+        })
+
+        XCTAssertEqual(send(["type": "ping"], to: 1), "no_socket_client")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: socketPath))
+    }
+
     func testDoesNotListenWhenTheTrustedRequirementCannotBeBuilt() {
         server.stop()
         startServer(maxClients: 1, makeVerifyPeer: { .failure(.ownSignatureUnavailable(errSecCSUnsigned)) })
