@@ -217,6 +217,15 @@ final class ShortcutRecordingTests: XCTestCase {
         XCTAssertEqual(matcher.action(for: event), .pass)
     }
 
+    func testPassesAnAutorepeatOfTheShortcutWhileSuspended() {
+        matcher.isSuspended = true
+        let event = CGEvent(keyboardEventSource: nil, virtualKey: 46, keyDown: true)!
+        event.flags = [.maskCommand, .maskShift]
+        event.setIntegerValueField(.keyboardEventAutorepeat, value: 1)
+
+        XCTAssertEqual(matcher.action(for: event), .pass)
+    }
+
     func testReportsTheOtherTargetWhenTheCombinationIsTaken() {
         XCTAssertEqual(matcher.conflict(for: micShortcut, recording: .camera), .mic)
         XCTAssertEqual(matcher.conflict(for: cameraShortcut, recording: .mic), .camera)
