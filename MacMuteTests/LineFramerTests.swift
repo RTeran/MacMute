@@ -62,6 +62,30 @@ final class LineFramerTests: XCTestCase {
         XCTAssertEqual(lines.last, Data("line1000".utf8))
     }
 
+    func testFramesALineAtTheLimitSentOneByteAtATimeInLinearTime() throws {
+        var framer = LineFramer()
+        let byte = Data("a".utf8)
+        let start = Date()
+
+        for _ in 0..<LineFramer.defaultMaxLineLength {
+            XCTAssertEqual(try framer.append(byte), [])
+        }
+        let lines = try framer.append(Data("\n".utf8))
+
+        // A rescan of the pending bytes on every append took over 20 s here; linear framing takes milliseconds.
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2)
+        XCTAssertEqual(lines, [Data(repeating: 0x61, count: LineFramer.defaultMaxLineLength)])
+    }
+
+    func testFindsANewlineAfterBytesThatWereAlreadyScanned() throws {
+        var framer = LineFramer()
+
+        XCTAssertEqual(try framer.append(Data("ab".utf8)), [])
+        XCTAssertEqual(try framer.append(Data("c".utf8)), [])
+        XCTAssertEqual(try framer.append(Data("\nde".utf8)), [Data("abc".utf8)])
+        XCTAssertEqual(try framer.append(Data("f\ng\n".utf8)), [Data("def".utf8), Data("g".utf8)])
+    }
+
     func testDefaultLimitIs64KB() {
         XCTAssertEqual(LineFramer.defaultMaxLineLength, 64 * 1024)
     }

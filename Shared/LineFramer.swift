@@ -11,6 +11,7 @@ struct LineFramer {
     static let defaultMaxLineLength = 64 * 1024
     let maxLineLength: Int
     private var pending = Data()
+    private var scanned = 0
 
     init(maxLineLength: Int = defaultMaxLineLength) {
         self.maxLineLength = maxLineLength
@@ -20,13 +21,16 @@ struct LineFramer {
         pending.append(bytes)
         var lines: [Data] = []
         var lineStart = pending.startIndex
-        while let newline = pending[lineStart...].firstIndex(of: 0x0A) {
+        var searchFrom = pending.startIndex + scanned
+        while let newline = pending[searchFrom...].firstIndex(of: 0x0A) {
             let line = pending[lineStart..<newline]
             guard line.count <= maxLineLength else { throw LineTooLong(limit: maxLineLength) }
             if !line.isEmpty { lines.append(Data(line)) }
             lineStart = pending.index(after: newline)
+            searchFrom = lineStart
         }
-        pending = Data(pending[lineStart...])
+        if lineStart != pending.startIndex { pending = Data(pending[lineStart...]) }
+        scanned = pending.count
         guard pending.count <= maxLineLength else { throw LineTooLong(limit: maxLineLength) }
         return lines
     }
