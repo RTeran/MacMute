@@ -38,6 +38,9 @@
 		A1000086 /* LogPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000084 /* LogPreview.swift */; };
 		A1000087 /* LogPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000084 /* LogPreview.swift */; };
 		A1000088 /* LogPreviewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000085 /* LogPreviewTests.swift */; };
+		A1000089 /* PeerCodeVerifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000086 /* PeerCodeVerifier.swift */; };
+		A1000090 /* PeerCodeVerifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000086 /* PeerCodeVerifier.swift */; };
+		A1000091 /* PeerCodeVerifierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000087 /* PeerCodeVerifierTests.swift */; };
 		A1000083 /* MuteStateCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000082 /* MuteStateCoordinator.swift */; };
 		A1000084 /* MuteStateCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000082 /* MuteStateCoordinator.swift */; };
 		A1000085 /* MuteStateCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000083 /* MuteStateCoordinatorTests.swift */; };
@@ -95,6 +98,8 @@
 		A2000081 /* CallRouterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallRouterTests.swift; sourceTree = "<group>"; };
 		A2000084 /* LogPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogPreview.swift; sourceTree = "<group>"; };
 		A2000085 /* LogPreviewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogPreviewTests.swift; sourceTree = "<group>"; };
+		A2000086 /* PeerCodeVerifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerCodeVerifier.swift; sourceTree = "<group>"; };
+		A2000087 /* PeerCodeVerifierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerCodeVerifierTests.swift; sourceTree = "<group>"; };
 		A2000082 /* MuteStateCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuteStateCoordinator.swift; sourceTree = "<group>"; };
 		A2000083 /* MuteStateCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuteStateCoordinatorTests.swift; sourceTree = "<group>"; };
 		A3000030 /* MacMuteTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MacMuteTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -172,6 +177,7 @@
 			isa = PBXGroup;
 			children = (
 				A2000070 /* LineFramer.swift */,
+				A2000086 /* PeerCodeVerifier.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -196,6 +202,7 @@
 				A2000071 /* LineFramerTests.swift */,
 				A2000081 /* CallRouterTests.swift */,
 				A2000085 /* LogPreviewTests.swift */,
+				A2000087 /* PeerCodeVerifierTests.swift */,
 				A2000083 /* MuteStateCoordinatorTests.swift */,
 			);
 			path = MacMuteTests;
@@ -303,6 +310,7 @@
 				A1000070 /* LineFramer.swift in Sources */,
 				A1000080 /* CallRouter.swift in Sources */,
 				A1000086 /* LogPreview.swift in Sources */,
+				A1000089 /* PeerCodeVerifier.swift in Sources */,
 				A1000083 /* MuteStateCoordinator.swift in Sources */,
 				A1000009 /* main.swift in Sources */,
 			);
@@ -334,6 +342,8 @@
 				A1000082 /* CallRouterTests.swift in Sources */,
 				A1000087 /* LogPreview.swift in Sources */,
 				A1000088 /* LogPreviewTests.swift in Sources */,
+				A1000090 /* PeerCodeVerifier.swift in Sources */,
+				A1000091 /* PeerCodeVerifierTests.swift in Sources */,
 				A1000084 /* MuteStateCoordinator.swift in Sources */,
 				A1000085 /* MuteStateCoordinatorTests.swift in Sources */,
 			);
