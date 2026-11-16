@@ -419,6 +419,23 @@ final class SocketServerTests: XCTestCase {
         _ = connectHelper()
     }
 
+    func testARestartedServerTakesTheLockAgain() {
+        server.stop()
+        let listening = expectState(.listening)
+        server.start()
+        wait(for: [listening], timeout: 2)
+
+        let second = SocketServer(socketPath: socketPath, makeVerifyPeer: { .success { _ in .success(()) } })
+        let reported = expectation(description: "second server state")
+        var secondStates: [SocketServerState] = []
+        second.onStateChange = { secondStates.append($0); reported.fulfill() }
+        second.start()
+        wait(for: [reported], timeout: 2)
+        second.stop()
+
+        XCTAssertEqual(secondStates, [.anotherInstanceRunning])
+    }
+
     func testANewServerStartsOnceTheFirstOneStops() {
         server.stop()
 
