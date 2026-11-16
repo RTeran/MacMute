@@ -642,6 +642,30 @@ describe("getCameraState", () => {
     expect(script.getCameraState()).toBe(true);
   });
 
+  test("returns false when aria-label is 'Activar cámara' (Spanish, camera is off)", () => {
+    document.body.innerHTML =
+      '<button aria-label="Activar cámara"></button>';
+    expect(script.getCameraState()).toBe(false);
+  });
+
+  test("returns true when aria-label is 'Desactivar cámara' (Spanish, camera is on)", () => {
+    document.body.innerHTML =
+      '<button aria-label="Desactivar cámara"></button>';
+    expect(script.getCameraState()).toBe(true);
+  });
+
+  test("returns false when aria-label is 'Kamera einschalten' (German, camera is off)", () => {
+    document.body.innerHTML =
+      '<button aria-label="Kamera einschalten" aria-pressed="true"></button>';
+    expect(script.getCameraState()).toBe(false);
+  });
+
+  test("returns true when aria-label is 'Kamera ausschalten' (German, camera is on)", () => {
+    document.body.innerHTML =
+      '<button aria-label="Kamera ausschalten" aria-pressed="false"></button>';
+    expect(script.getCameraState()).toBe(true);
+  });
+
   test("returns false when aria-pressed='false' (camera is off)", () => {
     document.body.innerHTML =
       '<button aria-label="camera settings" aria-pressed="false"></button>';

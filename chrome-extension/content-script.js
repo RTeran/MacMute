@@ -87,13 +87,13 @@
 
     const ariaLabel = (button.getAttribute("aria-label") || "").toLowerCase();
 
-    // "turn on camera" → camera is currently OFF
-    if (ariaLabel.includes("turn on") || ariaLabel.includes("activar cámara") || ariaLabel.includes("camera einschalten")) {
-      return false;
-    }
-    // "turn off camera" → camera is currently ON
+    // "activar cámara" is a substring of "desactivar cámara", so the "turn off" labels are
+    // checked first.
     if (ariaLabel.includes("turn off") || ariaLabel.includes("desactivar cámara") || ariaLabel.includes("kamera ausschalten")) {
       return true;
+    }
+    if (ariaLabel.includes("turn on") || ariaLabel.includes("activar cámara") || ariaLabel.includes("kamera einschalten")) {
+      return false;
     }
 
     // Fallback: check aria-pressed attribute
