@@ -28,9 +28,13 @@ struct PendingToggleTracker {
 
     private(set) var pending: [ToggleTarget: Pending] = [:]
 
-    // A press made before the previous one is confirmed expects to undo that previous press.
-    mutating func begin(_ target: ToggleTarget, requestId: String, confirmedState: Bool?) -> Pending {
-        let baseline = pending[target].map(\.expected) ?? confirmedState
+    // A press made before the previous one is confirmed expects to undo that previous press, unless
+    // it goes elsewhere: then only the confirmed state of its own recipient is a valid baseline.
+    mutating func begin(
+        _ target: ToggleTarget, requestId: String, confirmedState: Bool?, chainsPending: Bool = true
+    ) -> Pending {
+        let chained = chainsPending ? pending[target].map(\.expected) : nil
+        let baseline = chained ?? confirmedState
         let toggle = Pending(requestId: requestId, expected: baseline.map { !$0 })
         pending[target] = toggle
         return toggle
@@ -141,6 +145,7 @@ final class ToggleConfirmation {
     private let confirmationTimeouts: ConfirmationTimeouts
     private let feedbackDuration: TimeInterval
     private let confirmedState: (ToggleTarget) -> Bool?
+    private let chainsPending: (ToggleTarget) -> Bool
     private let send: Send
     private let schedule: Schedule
     private let makeRequestId: () -> String
@@ -153,6 +158,7 @@ final class ToggleConfirmation {
         confirmationTimeouts: ConfirmationTimeouts,
         feedbackDuration: TimeInterval,
         confirmedState: @escaping (ToggleTarget) -> Bool?,
+        chainsPending: @escaping (ToggleTarget) -> Bool = { _ in true },
         send: @escaping Send,
         schedule: @escaping Schedule = ToggleConfirmation.scheduleOnMain,
         makeRequestId: @escaping () -> String = { UUID().uuidString }
@@ -160,6 +166,7 @@ final class ToggleConfirmation {
         self.confirmationTimeouts = confirmationTimeouts
         self.feedbackDuration = feedbackDuration
         self.confirmedState = confirmedState
+        self.chainsPending = chainsPending
         self.send = send
         self.schedule = schedule
         self.makeRequestId = makeRequestId
@@ -175,7 +182,10 @@ final class ToggleConfirmation {
 
     func toggle(_ target: ToggleTarget) {
         let requestId = makeRequestId()
-        let toggle = pendingToggles.begin(target, requestId: requestId, confirmedState: confirmedState(target))
+        let toggle = pendingToggles.begin(
+            target, requestId: requestId,
+            confirmedState: confirmedState(target), chainsPending: chainsPending(target)
+        )
 
         confirmationTimers[target]?.cancel()
         confirmationTimers[target] = schedule(.confirmation, confirmationTimeouts.timeout(for: target)) { [weak self] in

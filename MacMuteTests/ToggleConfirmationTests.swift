@@ -385,6 +385,24 @@ final class PendingToggleTrackerTests: XCTestCase {
         XCTAssertEqual(second.expected, false)
     }
 
+    func testBeginStartsFromTheConfirmedStateWhenItDoesNotChainThePendingToggle() {
+        var tracker = PendingToggleTracker()
+        _ = tracker.begin(.mic, requestId: "r1", confirmedState: false)
+
+        let second = tracker.begin(.mic, requestId: "r2", confirmedState: false, chainsPending: false)
+
+        XCTAssertEqual(second.expected, true)
+    }
+
+    func testBeginWithoutChainingOrAKnownStateExpectsAnyState() {
+        var tracker = PendingToggleTracker()
+        _ = tracker.begin(.mic, requestId: "r1", confirmedState: false)
+
+        let second = tracker.begin(.mic, requestId: "r2", confirmedState: nil, chainsPending: false)
+
+        XCTAssertNil(second.expected)
+    }
+
     func testBeginWithoutAKnownStateExpectsAnyState() {
         var tracker = PendingToggleTracker()
 

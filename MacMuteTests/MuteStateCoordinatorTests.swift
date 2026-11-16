@@ -315,6 +315,31 @@ final class MuteStateCoordinatorTests: XCTestCase {
         XCTAssertTrue(confirmationTimer().isCancelled)
     }
 
+    func testASecondPressToAnotherHelperStartsFromThatHelpersState() {
+        connectWithMic(1, muted: false)
+        coordinator.handle(["type": "call_status", "inCall": true], from: 1)
+        coordinator.toggle(.mic)
+        connectWithMic(2, muted: false)
+        coordinator.handle(["type": "call_status", "inCall": true], from: 2)
+
+        coordinator.toggle(.mic)
+        coordinator.handle(toggleResult(.mic, "r2", ok: true, newState: true), from: 2)
+
+        XCTAssertFalse(events.contains("amber mic"))
+        XCTAssertTrue(confirmationTimer().isCancelled)
+    }
+
+    func testASecondPressToTheSameHelperUndoesThePendingOne() {
+        connectWithMic(1, muted: false)
+        coordinator.toggle(.mic)
+
+        coordinator.toggle(.mic)
+        coordinator.handle(toggleResult(.mic, "r2", ok: true, newState: false), from: 1)
+
+        XCTAssertFalse(events.contains("amber mic"))
+        XCTAssertTrue(confirmationTimer().isCancelled)
+    }
+
     func testDisconnectingAHelperThatDidNotReceiveTheToggleKeepsItPending() {
         connectWithMic(1, muted: false)
         connectWithMic(2, muted: false)

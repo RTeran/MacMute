@@ -42,6 +42,7 @@ final class MuteStateCoordinator {
             confirmationTimeouts: confirmationTimeouts,
             feedbackDuration: feedbackDuration,
             confirmedState: { [unowned self] target in self.router.selected.flatMap(self.router.profile)?[target] },
+            chainsPending: { [unowned self] target in self.router.toggleRecipient(for: target) == self.router.selected },
             send: { [unowned self] target, requestId, completion in
                 self.sendToggle(target, requestId: requestId, completion: completion)
             },
@@ -69,7 +70,8 @@ final class MuteStateCoordinator {
     func toggle(_ target: ToggleTarget) {
         if toggleConfirmation.pendingToggles.pending[target] != nil,
            let previous = router.toggleRecipient(for: target), previous != router.selected {
-            // The previous press can no longer be confirmed: only the new recipient's replies count.
+            // The previous press can no longer be confirmed: only the new recipient's replies count,
+            // and the new press starts from that recipient's own state.
             logger.notice("New \(target.rawValue, privacy: .public) press replaces one pending on helper \(previous, privacy: .public), sent to helper \(String(describing: self.router.selected), privacy: .public)")
         }
         toggleConfirmation.toggle(target)
