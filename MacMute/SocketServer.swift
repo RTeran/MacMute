@@ -28,6 +28,7 @@ class SocketServer {
 
     static let defaultMaxClients = 16
     private static let listenBacklog: Int32 = 8
+    private static let lockFileName = "macmute.lock"
 
     private struct Client {
         let fd: Int32
@@ -40,6 +41,8 @@ class SocketServer {
     private var verifyPeer: VerifyPeer = { _ in .failure(.requirementNotSatisfied(errSecCSReqFailed)) }
     private var rejectionLog = PeerRejectionLog()
     private var serverSocket: Int32 = -1
+    // Held from the first start until stop(), so only one MacMute may touch the socket path.
+    private var lockFile: Int32 = -1
     // Only the socket this server bound is unlinked: a refused start must not remove whatever sits at
     // socketPath (e.g. behind a symlinked directory), nor a file that replaced the socket later.
     private var boundFile: (device: dev_t, inode: ino_t)?
@@ -181,6 +184,8 @@ class SocketServer {
             clients.removeAll()
             serverSocket = -1
             unlinkBoundFile()
+            if lockFile >= 0 { close(lockFile) }
+            lockFile = -1
         }
     }
 
@@ -258,6 +263,21 @@ class SocketServer {
             report(.failed)
             return
         }
+        switch acquireLock(in: directory) {
+        case .acquired:
+            break
+        case .heldByAnotherInstance:
+            logger.error("Not starting the socket server: another MacMute holds the lock in \(directory.lastPathComponent, privacy: .public)")
+            report(.anotherInstanceRunning)
+            return
+        case let .unsafe(reason):
+            logger.fault("Not starting the socket server: \(reason, privacy: .public)")
+            report(.failed)
+            return
+        case let .failed(message):
+            failTransiently(message)
+            return
+        }
         switch makeVerifyPeer() {
         case let .success(verify):
             verifyPeer = verify
@@ -267,26 +287,30 @@ class SocketServer {
             return
         }
 
+        var existing = stat()
+        if lstat(socketPath, &existing) == 0 {
+            guard existing.st_mode & S_IFMT == S_IFSOCK else {
+                logger.fault("Not starting the socket server: \(self.socketName, privacy: .public) exists and is not a socket")
+                report(.failed)
+                return
+            }
+            // Holding the lock means no other MacMute serves this socket, so it is stale.
+            guard unlink(socketPath) == 0 else {
+                failTransiently("Failed to remove the stale socket \(self.socketName): \(String(cString: strerror(errno)))")
+                return
+            }
+        } else if errno != ENOENT {
+            failTransiently("Failed to stat socket \(self.socketName): \(String(cString: strerror(errno)))")
+            return
+        }
+
         serverSocket = socket(AF_UNIX, SOCK_STREAM, 0)
         guard serverSocket >= 0 else {
             failTransiently("Failed to create socket: \(String(cString: strerror(errno)))")
             return
         }
 
-        var bindResult = Self.bind(serverSocket, to: address)
-        if bindResult != 0 && errno == EADDRINUSE {
-            // Probed before unlinking, so a second instance never takes the socket of a running one.
-            if Self.someoneListens(at: address) {
-                logger.error("Not starting the socket server: another MacMute is already listening on \(self.socketName, privacy: .public)")
-                abortStart()
-                report(.anotherInstanceRunning)
-                return
-            }
-            unlink(socketPath)
-            bindResult = Self.bind(serverSocket, to: address)
-        }
-
-        guard bindResult == 0 else {
+        guard Self.bind(serverSocket, to: address) == 0 else {
             failTransiently("Failed to bind socket \(self.socketName): \(String(cString: strerror(errno)))")
             return
         }
@@ -331,16 +355,42 @@ class SocketServer {
         }
     }
 
-    private static func someoneListens(at address: sockaddr_un) -> Bool {
-        let probe = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard probe >= 0 else { return false }
-        defer { close(probe) }
-        var address = address
-        return withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                connect(probe, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) == 0
-            }
+    private enum LockOutcome {
+        case acquired
+        case heldByAnotherInstance
+        case unsafe(String)
+        case failed(String)
+    }
+
+    // flock, unlike fcntl locks, belongs to the open file, so closing another descriptor of the
+    // same file never drops it. The file is never unlinked: a new inode would let a second
+    // instance lock it while the first still holds the old one.
+    private func acquireLock(in directory: URL) -> LockOutcome {
+        guard lockFile < 0 else { return .acquired }
+        let path = directory.appendingPathComponent(Self.lockFileName).path
+        let fd = open(path, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0o600)
+        guard fd >= 0 else {
+            let code = errno
+            let message = "Failed to open the lock file: \(String(cString: strerror(code)))"
+            return code == ELOOP ? .unsafe(message) : .failed(message)
         }
+        var info = stat()
+        guard fstat(fd, &info) == 0 else {
+            let message = "Failed to stat the lock file: \(String(cString: strerror(errno)))"
+            close(fd)
+            return .failed(message)
+        }
+        guard info.st_mode & S_IFMT == S_IFREG, info.st_uid == getuid() else {
+            close(fd)
+            return .unsafe("the lock file is not a regular file owned by this user")
+        }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+            let code = errno
+            close(fd)
+            return code == EWOULDBLOCK ? .heldByAnotherInstance : .failed("Failed to lock the lock file: \(String(cString: strerror(code)))")
+        }
+        lockFile = fd
+        return .acquired
     }
 
     private func report(_ state: SocketServerState) {

@@ -27,6 +27,7 @@ final class SocketServerTests: XCTestCase {
     override func tearDown() {
         clients.forEach { close($0) }
         server.stop()
+        chflags(socketPath, 0)
         unlink(socketPath)
         try? FileManager.default.removeItem(at: socketDirectory)
         super.tearDown()
@@ -374,30 +375,71 @@ final class SocketServerTests: XCTestCase {
         XCTAssertTrue(waitForEndOfStream(on: rawConnect()))
     }
 
-    func testReplacesAStaleSocketLeftByAServerThatIsGone() throws {
+    func testASecondServerWaitsForTheFirstOneEvenBeforeItListens() throws {
         server.stop()
-        let stale = socket(AF_UNIX, SOCK_STREAM, 0)
-        defer { close(stale) }
-        var address = try SocketServer.socketAddress(for: socketPath).get()
-        let bound = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(stale, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
-        }
-        XCTAssertEqual(bound, 0)
+        try leaveUnremovableStaleSocket()
+        let staleSocket = try inode(of: socketPath)
+        let firstRetry = expectState(.retrying(after: 0.02))
+        startServer()
+        wait(for: [firstRetry], timeout: 2)
+
+        let second = SocketServer(socketPath: socketPath, makeVerifyPeer: { .success { _ in .success(()) } })
+        let reported = expectation(description: "second server state")
+        var secondStates: [SocketServerState] = []
+        second.onStateChange = { secondStates.append($0); reported.fulfill() }
+        allowRemovingTheStaleSocket()
+        second.start()
+        wait(for: [reported], timeout: 2)
+        second.stop()
+
+        XCTAssertEqual(secondStates, [.anotherInstanceRunning])
+        XCTAssertEqual(try inode(of: socketPath), staleSocket)
+        let listening = expectState(.listening)
+        wait(for: [listening], timeout: 2)
+        _ = connectHelper()
+    }
+
+    func testANewServerStartsOnceTheFirstOneStops() {
+        server.stop()
 
         startServer()
 
         _ = connectHelper()
     }
 
-    func testRetriesUntilTheSocketCanBeBound() throws {
+    func testDoesNotListenWhenSomethingOtherThanASocketIsAtThePath() throws {
         server.stop()
-        try FileManager.default.createDirectory(atPath: socketPath + "/blocker", withIntermediateDirectories: true)
+        XCTAssertTrue(FileManager.default.createFile(atPath: socketPath, contents: Data("other".utf8)))
+        let failed = expectState(.failed)
+        startServer()
+        wait(for: [failed], timeout: 2)
+        server.stop()
+
+        XCTAssertEqual(states, [.failed])
+        XCTAssertEqual(FileManager.default.contents(atPath: socketPath), Data("other".utf8))
+    }
+
+    func testReplacesAStaleSocketLeftByAServerThatIsGone() throws {
+        server.stop()
+        try leaveStaleSocket()
+        let listening = expectState(.listening)
+
+        startServer()
+
+        wait(for: [listening], timeout: 2)
+        XCTAssertEqual(states, [.listening])
+        _ = connectHelper()
+    }
+
+    func testRetriesUntilTheStaleSocketCanBeRemoved() throws {
+        server.stop()
+        try leaveUnremovableStaleSocket()
         let cappedRetry = expectState(.retrying(after: 0.05))
         startServer()
         wait(for: [cappedRetry], timeout: 2)
 
         let listening = expectState(.listening)
-        try FileManager.default.removeItem(atPath: socketPath)
+        allowRemovingTheStaleSocket()
         wait(for: [listening], timeout: 2)
 
         XCTAssertEqual(Array(states.prefix(3)), [.retrying(after: 0.02), .retrying(after: 0.04), .retrying(after: 0.05)])
@@ -406,12 +448,13 @@ final class SocketServerTests: XCTestCase {
 
     func testStoppingCancelsAPendingRetry() throws {
         server.stop()
-        try FileManager.default.createDirectory(atPath: socketPath + "/blocker", withIntermediateDirectories: true)
+        try leaveUnremovableStaleSocket()
         let firstRetry = expectState(.retrying(after: 0.02))
         startServer()
         wait(for: [firstRetry], timeout: 2)
 
         server.stop()
+        allowRemovingTheStaleSocket()
         try FileManager.default.removeItem(atPath: socketPath)
         let settled = expectation(description: "retries would have run")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { settled.fulfill() }
@@ -423,7 +466,7 @@ final class SocketServerTests: XCTestCase {
 
     func testStartingAgainBeginsTheBackoffFromTheFirstDelay() throws {
         server.stop()
-        try FileManager.default.createDirectory(atPath: socketPath + "/blocker", withIntermediateDirectories: true)
+        try leaveUnremovableStaleSocket()
         let cappedRetry = expectState(.retrying(after: 0.05))
         startServer()
         wait(for: [cappedRetry], timeout: 2)
@@ -595,6 +638,27 @@ final class SocketServerTests: XCTestCase {
         let arrived = expectation(description: "state \(state)")
         awaitedState = (state, arrived)
         return arrived
+    }
+
+    /// Leaves a socket file nobody listens on, as a crashed server would.
+    private func leaveStaleSocket() throws {
+        let stale = socket(AF_UNIX, SOCK_STREAM, 0)
+        defer { close(stale) }
+        var address = try SocketServer.socketAddress(for: socketPath).get()
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(stale, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        }
+        XCTAssertEqual(bound, 0)
+    }
+
+    /// Makes unlinking the stale socket fail with EPERM, a failure the server retries.
+    private func leaveUnremovableStaleSocket() throws {
+        try leaveStaleSocket()
+        XCTAssertEqual(chflags(socketPath, UInt32(UF_IMMUTABLE)), 0)
+    }
+
+    private func allowRemovingTheStaleSocket() {
+        XCTAssertEqual(chflags(socketPath, 0), 0)
     }
 
     private func inode(of path: String) throws -> ino_t {
