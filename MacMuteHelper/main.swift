@@ -72,6 +72,12 @@ DispatchQueue.global(qos: .userInteractive).async {
         case .endOfInput:
             HelperLog.logger.notice("stdin closed, exiting")
             exit(0)
+        case let .truncated(missingBytes):
+            HelperLog.logger.error("stdin closed inside a frame, \(missingBytes, privacy: .public) bytes missing; exiting")
+            exit(1)
+        case let .readFailed(code):
+            HelperLog.logger.error("Reading stdin failed: \(String(cString: strerror(code)), privacy: .public); exiting")
+            exit(1)
         case let .skipped(reason):
             HelperLog.logger.error("Skipping a message from the extension: \(reason, privacy: .public)")
         case let .message(message):

@@ -40,18 +40,52 @@ final class NativeMessageReaderTests: XCTestCase {
         XCTAssertEqual(nextMessage()?["n"] as? Int, 1)
     }
 
-    func testSkipsAFrameThatIsNotJSON() {
+    func testSkipsAFrameThatIsNotJSONWithTheParserError() {
         send(frame("not json") + frame(#"{"n":1}"#))
 
-        XCTAssertTrue(nextIsSkipped())
+        XCTAssertEqual(nextSkipReason()?.hasPrefix("frame of 8 bytes is not JSON: "), true)
         XCTAssertEqual(nextMessage()?["n"] as? Int, 1)
     }
 
     func testSkipsAnEmptyFrame() {
         send(frame("") + frame(#"{"n":1}"#))
 
-        XCTAssertTrue(nextIsSkipped())
+        XCTAssertEqual(nextSkipReason(), "empty frame")
         XCTAssertEqual(nextMessage()?["n"] as? Int, 1)
+    }
+
+    func testReadsAFrameWrittenInTwoParts() {
+        let whole = frame(#"{"n":1}"#)
+        send(whole.prefix(6))
+        let handle = pipe.fileHandleForWriting
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) { handle.write(whole.dropFirst(6)) }
+
+        XCTAssertEqual(nextMessage()?["n"] as? Int, 1)
+    }
+
+    func testKeepsReadingWhenASignalInterruptsTheRead() {
+        var ignore = sigaction()
+        ignore.__sigaction_u.__sa_handler = { _ in }
+        sigemptyset(&ignore.sa_mask)
+        ignore.sa_flags = 0
+        var previous = sigaction()
+        XCTAssertEqual(sigaction(SIGALRM, &ignore, &previous), 0)
+        defer { sigaction(SIGALRM, &previous, nil) }
+        let readingThread = pthread_self()
+        let handle = pipe.fileHandleForWriting
+        let message = frame(#"{"n":1}"#)
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) {
+            pthread_kill(readingThread, SIGALRM)
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { handle.write(message) }
+        }
+
+        XCTAssertEqual(nextMessage()?["n"] as? Int, 1)
+    }
+
+    func testReportsAFailedRead() {
+        let reader = NativeMessageReader(fileDescriptor: -1)
+
+        guard case .readFailed(errno: EBADF) = reader.next() else { return XCTFail("Expected readFailed(EBADF)") }
     }
 
     func testDiscardsAFrameLargerThanTheLimitAndReadsTheNextOne() {
@@ -80,33 +114,43 @@ final class NativeMessageReaderTests: XCTestCase {
         XCTAssertTrue(nextIsEnd())
     }
 
-    func testEndsWhenTheInputStopsInsideTheLengthPrefix() {
+    func testReportsATruncatedLengthPrefix() {
         send(Data([5, 0]))
         try? pipe.fileHandleForWriting.close()
 
-        XCTAssertTrue(nextIsEnd())
+        XCTAssertEqual(nextMissingBytes(), 2)
     }
 
-    func testEndsWhenTheInputStopsInsideAMessage() {
+    func testReportsATruncatedMessage() {
         send(frame(#"{"n":1}"#).dropLast(2))
         try? pipe.fileHandleForWriting.close()
 
-        XCTAssertTrue(nextIsEnd())
+        XCTAssertEqual(nextMissingBytes(), 2)
     }
 
-    func testEndsWhenTheInputStopsInsideADiscardedFrame() {
-        var header = Data(count: 4)
-        header.withUnsafeMutableBytes { $0.storeBytes(of: UInt32(NativeMessageReader.maxMessageLength + 1).littleEndian, as: UInt32.self) }
-        send(header + Data(repeating: 0x61, count: 10))
+    func testReportsATruncatedDiscardedFrame() {
+        send(header(UInt32(NativeMessageReader.maxMessageLength + 1)) + Data(repeating: 0x61, count: 10))
         try? pipe.fileHandleForWriting.close()
 
-        XCTAssertTrue(nextIsEnd())
+        XCTAssertEqual(nextMissingBytes(), NativeMessageReader.maxMessageLength + 1 - 10)
+    }
+
+    func testDrainsTheLargestPossibleLengthInChunks() {
+        send(header(.max) + Data(repeating: 0x61, count: 3000))
+        try? pipe.fileHandleForWriting.close()
+
+        XCTAssertEqual(nextMissingBytes(), Int(UInt32.max) - 3000)
     }
 
     private func frame(_ json: String) -> Data {
         let body = Data(json.utf8)
         var length = UInt32(body.count).littleEndian
         return Data(bytes: &length, count: 4) + body
+    }
+
+    private func header(_ length: UInt32) -> Data {
+        var littleEndian = length.littleEndian
+        return Data(bytes: &littleEndian, count: 4)
     }
 
     private func send(_ data: Data) {
@@ -125,6 +169,16 @@ final class NativeMessageReaderTests: XCTestCase {
             return nil
         }
         return message
+    }
+
+    private func nextSkipReason() -> String? {
+        guard case let .skipped(reason) = reader.next() else { return nil }
+        return reason
+    }
+
+    private func nextMissingBytes() -> Int? {
+        guard case let .truncated(missingBytes) = reader.next() else { return nil }
+        return missingBytes
     }
 
     private func nextIsSkipped() -> Bool {
