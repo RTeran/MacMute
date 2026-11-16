@@ -110,6 +110,10 @@ struct ShortcutConfigView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSPopover.willCloseNotification)) { _ in
             endRecording()
         }
+        // Switching apps can leave the transient popover open but unable to receive keys.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            endRecording()
+        }
     }
 
     private func endRecording() {
