@@ -15,3 +15,11 @@ test("loads the bridge on the same pages as the content script", () => {
 test("requires a Chrome version that supports main-world content scripts", () => {
   expect(Number(manifest.minimum_chrome_version)).toBeGreaterThanOrEqual(111);
 });
+
+test("does not ask for the tabs permission, which lets it read the URL of every tab", () => {
+  expect(manifest.permissions).not.toContain("tabs");
+});
+
+test("keeps the Meet host permission that lets it list Meet tabs and read their URL", () => {
+  expect(manifest.host_permissions).toContain("https://meet.google.com/*");
+});

@@ -286,12 +286,38 @@
     return toggleControl("camera", findCameraButton, getCameraState, timeoutMs);
   }
 
+  let tornDown = false;
+
+  function safeSend(message) {
+    if (tornDown) return;
+    const warnNotSent = (error) => console.warn(`MacMute: could not send ${message.type}`, error?.message);
+    try {
+      chrome.runtime.sendMessage(message).catch(warnNotSent);
+    } catch (error) {
+      // A synchronous throw means this instance's extension context is gone for good.
+      warnNotSent(error);
+      teardown();
+    }
+  }
+
   function sendStateUpdate(muted) {
-    chrome.runtime.sendMessage({ type: "state_update", muted: muted });
+    safeSend({ type: "state_update", muted: muted });
   }
 
   function sendCameraStateUpdate(active) {
-    chrome.runtime.sendMessage({ type: "camera_state_update", active: active });
+    safeSend({ type: "camera_state_update", active: active });
+  }
+
+  function answerStateQuery(target, readState, sendResponse) {
+    try {
+      const state = queriedState(target, readState);
+      if (state !== null) reportState(target, state);
+      // Inside the grace period the controls may be gone for a moment; only call_left ends the call.
+      sendResponse({ inCall: hasCallControls() || callControlsSeen });
+    } catch (error) {
+      console.warn(`MacMute: could not read the ${target} state`, error?.message);
+      sendResponse({ inCall: false, error: true });
+    }
   }
 
   // Listen for messages from background script
@@ -302,11 +328,7 @@
         return true;
 
       case "get_state":
-        const state = queriedState("mic", getMuteState);
-        if (state !== null) {
-          currentMuteState = state;
-          sendStateUpdate(state);
-        }
+        answerStateQuery("mic", getMuteState, sendResponse);
         break;
 
       case "toggle_camera":
@@ -314,11 +336,7 @@
         return true;
 
       case "get_camera_state":
-        const cameraState = queriedState("camera", getCameraState);
-        if (cameraState !== null) {
-          currentCameraState = cameraState;
-          sendCameraStateUpdate(cameraState);
-        }
+        answerStateQuery("camera", getCameraState, sendResponse);
         break;
     }
     return false;
@@ -393,6 +411,7 @@
     if (document.visibilityState !== "visible") return;
     mediaSessionSinceVisible.mic = undefined;
     mediaSessionSinceVisible.camera = undefined;
+    recheckAwaitedCallLeft();
   }
 
   document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -427,6 +446,135 @@
     }
     reportDomState("mic", getMuteState());
     reportDomState("camera", getCameraState());
+    noteCallControls();
+  }
+
+  // Meet swaps its controls out for a moment while it re-renders, so their absence only counts
+  // as leaving the call once it outlasts this grace period.
+  const CALL_LEFT_GRACE_MS = 1500;
+  // A toggle always settles within its own timeout; this only guards against one that never does.
+  const CALL_LEFT_MAX_TOGGLE_WAITS = 10;
+  let callControlsSeen = false;
+  let callLeftTimer = null;
+  let callLeftToggleWaits = 0;
+  // Meet's picture-in-picture moves the controls out of a hidden tab, so while it may be open a
+  // hidden tab without them is only judged once it is shown again or the window closes.
+  let callLeftAwaitingVisible = false;
+  let watchedPictureInPictureWindow = null;
+
+  function openPictureInPictureWindow() {
+    try {
+      if (!("documentPictureInPicture" in window)) return undefined;
+      return window.documentPictureInPicture.window;
+    } catch {
+      return undefined;
+    }
+  }
+
+  // Unverified in Meet: that this isolated world sees the page's window. To always wait for the
+  // tab to be shown instead, make this return true.
+  function pictureInPictureMayHoldTheCall() {
+    return openPictureInPictureWindow() !== null;
+  }
+
+  function watchPictureInPictureClose() {
+    const pictureInPictureWindow = openPictureInPictureWindow();
+    if (!pictureInPictureWindow || pictureInPictureWindow === watchedPictureInPictureWindow) return;
+    stopWatchingPictureInPicture();
+    watchedPictureInPictureWindow = pictureInPictureWindow;
+    pictureInPictureWindow.addEventListener("pagehide", handlePictureInPictureClosed);
+  }
+
+  function stopWatchingPictureInPicture() {
+    watchedPictureInPictureWindow?.removeEventListener("pagehide", handlePictureInPictureClosed);
+    watchedPictureInPictureWindow = null;
+  }
+
+  function handlePictureInPictureClosed() {
+    stopWatchingPictureInPicture();
+    recheckAwaitedCallLeft();
+  }
+
+  function recheckAwaitedCallLeft() {
+    if (!callLeftAwaitingVisible) return;
+    callLeftAwaitingVisible = false;
+    stopWatchingPictureInPicture();
+    if (callLeftTimer === null) startCallLeftWait();
+  }
+
+  function hasCallControls() {
+    return Boolean(findMuteButton() || findCameraButton());
+  }
+
+  // Only valid right after both buttons were read; saves searching the document a second time.
+  function hadCallControlsAtLastRead() {
+    return Boolean(buttonCache.mic || buttonCache.camera);
+  }
+
+  function cancelCallLeft() {
+    clearTimeout(callLeftTimer);
+    callLeftTimer = null;
+  }
+
+  function startCallLeftWait() {
+    callLeftToggleWaits = 0;
+    callLeftTimer = setTimeout(confirmCallLeft, CALL_LEFT_GRACE_MS);
+  }
+
+  function noteCallControls() {
+    if (hadCallControlsAtLastRead()) {
+      callControlsSeen = true;
+      callLeftAwaitingVisible = false;
+      stopWatchingPictureInPicture();
+      cancelCallLeft();
+    } else if (callControlsSeen && callLeftTimer === null && !callLeftAwaitingVisible) {
+      startCallLeftWait();
+    }
+  }
+
+  function confirmCallLeft() {
+    callLeftTimer = null;
+    if (!isExtensionAlive()) {
+      teardown();
+      return;
+    }
+    if (hasCallControls()) return;
+    if (document.visibilityState === "hidden" && pictureInPictureMayHoldTheCall()) {
+      console.debug("MacMute: call controls gone from a hidden tab, waiting for it to be shown");
+      callLeftAwaitingVisible = true;
+      watchPictureInPictureClose();
+      return;
+    }
+    if (togglesInProgress.size > 0) {
+      if (callLeftToggleWaits < CALL_LEFT_MAX_TOGGLE_WAITS) {
+        callLeftToggleWaits++;
+        callLeftTimer = setTimeout(confirmCallLeft, CALL_LEFT_GRACE_MS);
+        return;
+      }
+      console.warn("MacMute: a toggle is still in progress after the call controls left, reporting call_left anyway");
+    }
+    callControlsSeen = false;
+    safeSend({ type: "call_left" });
+    forgetCallState();
+    endTogglesInProgress("call_left");
+  }
+
+  function endTogglesInProgress(reason) {
+    for (const finish of [...togglesInProgress.values()]) {
+      finish({ ok: false, reason, before: null, after: null });
+    }
+  }
+
+  // A state kept from the previous call would hide the first report of the next one.
+  function forgetCallState() {
+    currentMuteState = null;
+    currentCameraState = null;
+    knownState.mic = null;
+    knownState.camera = null;
+    mediaSessionSinceVisible.mic = undefined;
+    mediaSessionSinceVisible.camera = undefined;
+    stopLateWait("mic");
+    stopLateWait("camera");
   }
 
   function cancelStateReport() {
@@ -458,6 +606,7 @@
       currentCameraState = initialCameraState;
       sendCameraStateUpdate(initialCameraState);
     }
+    noteCallControls();
   }
 
   if (document.body) {
@@ -467,13 +616,15 @@
   }
 
   function teardown() {
+    tornDown = true;
+    callControlsSeen = false;
     observer.disconnect();
     cancelStateReport();
+    cancelCallLeft();
+    stopWatchingPictureInPicture();
     stopLateWait("mic");
     stopLateWait("camera");
-    for (const finish of [...togglesInProgress.values()]) {
-      finish({ ok: false, reason: "torn_down", before: null, after: null });
-    }
+    endTogglesInProgress("torn_down");
     window.removeEventListener("message", handleMediaSessionMessage);
     document.removeEventListener("visibilitychange", handleVisibilityChange);
     document.removeEventListener("DOMContentLoaded", startObserving);
@@ -504,19 +655,18 @@
       LATE_MEDIA_SESSION_WINDOW_MS,
       CAMERA_STATE_CHANGE_TIMEOUT_MS,
       STATE_REPORT_DELAY_MS,
+      CALL_LEFT_GRACE_MS,
+      CALL_LEFT_MAX_TOGGLE_WAITS,
       _getObserver: () => observer,
       _getState: () => ({ currentMuteState, currentCameraState }),
       _setState: (s) => {
         if (s === null) {
-          currentMuteState = null;
-          currentCameraState = null;
-          knownState.mic = null;
-          knownState.camera = null;
-          mediaSessionSinceVisible.mic = undefined;
-          mediaSessionSinceVisible.camera = undefined;
-          stopLateWait("mic");
-          stopLateWait("camera");
+          forgetCallState();
           cancelStateReport();
+          cancelCallLeft();
+          callControlsSeen = false;
+          callLeftAwaitingVisible = false;
+          stopWatchingPictureInPicture();
           buttonCache.mic = null;
           buttonCache.camera = null;
           return;

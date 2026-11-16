@@ -2,43 +2,66 @@ const NATIVE_HOST = "com.macmute.helper";
 
 let port = null;
 
-function connectNative() {
-  try {
-    port = chrome.runtime.connectNative(NATIVE_HOST);
+// The helper exits at once when the app rejects it, so a fixed short delay would respawn it
+// forever. The delay grows until the app answers on a connection.
+const RECONNECT_INITIAL_DELAY_MS = 3000;
+const RECONNECT_MAX_DELAY_MS = 5 * 60 * 1000;
+let reconnectDelayMs = RECONNECT_INITIAL_DELAY_MS;
 
-    port.onMessage.addListener((message) => {
-      console.log("MacMute: Received from native host:", message);
-      Promise.resolve(handleNativeMessage(message)).catch((error) => {
-        console.error("MacMute: Failed to handle native message:", message, error);
-      });
-    });
-
-    port.onDisconnect.addListener(() => {
-      console.log(
-        "MacMute: Native host disconnected:",
-        chrome.runtime.lastError?.message
-      );
-      port = null;
-      // Reconnect after a delay
-      setTimeout(connectNative, 3000);
-    });
-
-    console.log("MacMute: Connected to native host");
-  } catch (error) {
-    console.error("MacMute: Failed to connect to native host:", error);
-    setTimeout(connectNative, 5000);
-  }
+// Only the current port's first disconnect or a failed connect gets here, so one timer runs at a time.
+function scheduleReconnect() {
+  const delayMs = reconnectDelayMs;
+  reconnectDelayMs = Math.min(delayMs * 2, RECONNECT_MAX_DELAY_MS);
+  console.log(`MacMute: Reconnecting to the native host in ${delayMs / 1000} s`);
+  setTimeout(connectNative, delayMs);
 }
 
-const MEET_URL_PATTERN = "https://meet.google.com/*";
+function connectNative() {
+  let connection;
+  try {
+    connection = chrome.runtime.connectNative(NATIVE_HOST);
+  } catch (error) {
+    console.error("MacMute: Failed to connect to native host:", error);
+    scheduleReconnect();
+    return;
+  }
+  port = connection;
+  let answered = false;
+
+  connection.onMessage.addListener((message) => {
+    // The helper only relays what the app sends, so any message means the app accepted it.
+    answered = true;
+    if (connection === port) reconnectDelayMs = RECONNECT_INITIAL_DELAY_MS;
+    console.log("MacMute: Received from native host:", message);
+    Promise.resolve(handleNativeMessage(message)).catch((error) => {
+      console.error("MacMute: Failed to handle native message:", message, error);
+    });
+  });
+
+  connection.onDisconnect.addListener(() => {
+    if (connection !== port) return;
+    // Closing before any message means the host is missing, forbidden or rejected by the app.
+    const log = answered ? console.log : console.warn;
+    log("MacMute: Native host disconnected:", chrome.runtime.lastError?.message);
+    port = null;
+    scheduleReconnect();
+  });
+
+  console.log("MacMute: Connected to native host");
+}
+
+const MEET_URL_PREFIX = "https://meet.google.com/";
+const MEET_URL_PATTERN = `${MEET_URL_PREFIX}*`;
 const RECEIVER_MISSING_ERROR = "Receiving end does not exist";
 const REINJECT_DELAY_MS = 200;
 const TOGGLE_TARGETS = { toggle: "mic", toggle_camera: "camera" };
 
-function postToNative(message) {
+// Passive updates are resent on the next change. A dropped toggle result is lost for good. A
+// dropped call status or reset is not queued: postCallStatus() sends it in full on the app's
+// get_state for the next connection, so a warning is enough here.
+function postToNative(message, { mustArrive = message.type === "toggle_result" || message.type === "call_status" } = {}) {
   if (!port) {
-    // Passive updates are resent on the next change; a lost toggle_result is what the user notices.
-    const log = message.type === "toggle_result" ? console.warn : console.debug;
+    const log = mustArrive ? console.warn : console.debug;
     log("MacMute: Native port not connected, dropping message", message);
     return;
   }
@@ -56,6 +79,8 @@ function handleNativeMessage(message) {
       return toggleInMeetTabs(message.type, message.requestId);
 
     case "get_state":
+      return queryStateAndCall();
+
     case "get_camera_state":
       return broadcastToMeetTabs({ type: message.type });
 
@@ -166,58 +191,127 @@ async function toggleInMeetTabs(type, requestId) {
 
 async function broadcastToMeetTabs(message) {
   const tabs = await chrome.tabs.query({ url: MEET_URL_PATTERN });
-  await Promise.allSettled(
+  return Promise.all(
     tabs.map((tab) =>
-      sendToTab(tab.id, message).catch((err) => {
-        console.log(`MacMute: Could not reach tab ${tab.id}:`, err.message);
-      })
+      sendToTab(tab.id, message).then(
+        (response) => ({ tabId: tab.id, reached: true, response }),
+        (err) => {
+          console.warn(`MacMute: Could not reach tab ${tab.id}:`, err.message);
+          return { tabId: tab.id, reached: false, response: undefined };
+        }
+      )
     )
   );
 }
 
-// Track mic and camera state reported by content scripts
-let lastKnownMuted = false;
-let lastKnownCameraActive = true; // true = camera on
+// The service worker loses tabsInCall when Chrome stops it, so the app's get_state on a new
+// connection rebuilds it. A tab that could not tell keeps its last known membership.
+async function queryStateAndCall() {
+  const trackedBefore = [...tabsInCall];
+  let answers;
+  try {
+    answers = await broadcastToMeetTabs({ type: "get_state" });
+  } catch (error) {
+    console.warn("MacMute: tabs_query_failed while answering get_state", error);
+    // Right after a service worker restart nothing is known yet, and a reset could end a live call.
+    if (trackedBefore.length > 0) postCallStatus();
+    return;
+  }
+  // Only tabs known before the broadcast: one that joined meanwhile may not be in the list yet.
+  const meetTabIds = new Set(answers.map(({ tabId }) => tabId));
+  for (const tabId of trackedBefore) {
+    if (!meetTabIds.has(tabId)) tabsInCall.delete(tabId);
+  }
+  for (const { tabId, reached, response } of answers) {
+    const inCall = inCallFromAnswer(tabId, reached, response);
+    if (inCall === true) tabsInCall.add(tabId);
+    if (inCall === false) tabsInCall.delete(tabId);
+  }
+  postCallStatus();
+}
 
-// Listen for messages from content scripts
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+// Undefined when the tab could not tell, so the caller keeps its last known membership.
+function inCallFromAnswer(tabId, reached, response) {
+  if (typeof response?.inCall === "boolean" && !response.error) return response.inCall;
+  if (reached) console.warn(`MacMute: tab ${tabId} could not tell whether it is in a call`, response);
+  return undefined;
+}
+
+// A finished load may be a reload or a page Meet swapped in without a call_left, so the tab is
+// asked again instead of guessing from the load events.
+async function recheckTabInCall(tabId) {
+  let response;
+  try {
+    response = await sendToTab(tabId, { type: "get_state" });
+  } catch (error) {
+    console.warn(`MacMute: Could not reach tab ${tabId}:`, error);
+    return;
+  }
+  // The tab may have left while it was asked; a tab that really rejoins sends its own state update.
+  if (!tabsInCall.has(tabId)) return;
+  const inCall = inCallFromAnswer(tabId, true, response);
+  if (inCall !== undefined) setTabInCall(tabId, inCall);
+}
+
+// A new helper connection starts with no call state in the app, so get_state always answers in
+// full, including the reset that a call ending while the port was down could not deliver.
+function postCallStatus() {
+  if (tabsInCall.size > 0) postToNative({ type: "call_status", inCall: true });
+  else endCall();
+}
+
+const tabsInCall = new Set();
+
+function setTabInCall(tabId, inCall) {
+  const wasInCall = tabsInCall.size > 0;
+  if (inCall) tabsInCall.add(tabId);
+  else tabsInCall.delete(tabId);
+  const isInCall = tabsInCall.size > 0;
+  if (!wasInCall && isInCall) postToNative({ type: "call_status", inCall: true });
+  if (wasInCall && !isInCall) endCall();
+}
+
+// The app keeps the last mic and camera state after the call ends, so they are reset here.
+function endCall() {
+  console.log("MacMute: No Meet tab is in a call anymore, resetting the mic and camera state");
+  postToNative({ type: "call_status", inCall: false });
+  postToNative({ type: "state_update", muted: false }, { mustArrive: true });
+  postToNative({ type: "camera_state_update", active: true }, { mustArrive: true });
+}
+
+chrome.runtime.onMessage.addListener((message, sender) => {
+  const tabId = sender.tab?.id;
   if (message.type === "state_update") {
     console.log("MacMute: State update from content script:", message.muted);
-    lastKnownMuted = message.muted;
+    if (tabId !== undefined) setTabInCall(tabId, true);
     postToNative({ type: "state_update", muted: message.muted });
   } else if (message.type === "camera_state_update") {
     console.log("MacMute: Camera state update from content script:", message.active);
-    lastKnownCameraActive = message.active;
+    if (tabId !== undefined) setTabInCall(tabId, true);
     postToNative({ type: "camera_state_update", active: message.active });
+  } else if (message.type === "call_left") {
+    console.log(`MacMute: Tab ${tabId} left the call`);
+    if (tabId !== undefined) setTabInCall(tabId, false);
   }
   return false;
 });
 
-// Unmute mic and re-enable camera when no active Meet tabs remain (closed or suspended)
-function checkNoMeetTabsLeft() {
-  chrome.tabs.query({ url: MEET_URL_PATTERN }, (tabs) => {
-    if (tabs.length === 0) {
-      if (lastKnownMuted) {
-        console.log("MacMute: No active Meet tabs remain, sending unmute");
-        lastKnownMuted = false;
-        postToNative({ type: "state_update", muted: false });
-      }
-      if (!lastKnownCameraActive) {
-        console.log("MacMute: No active Meet tabs remain, restoring camera state");
-        lastKnownCameraActive = true;
-        postToNative({ type: "camera_state_update", active: true });
-      }
-    }
-  });
-}
+// These events fire for every tab in the browser, so tabs outside a call return at once.
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (!tabsInCall.has(tabId)) return;
+  setTabInCall(tabId, false);
+});
 
-// Tab closed
-chrome.tabs.onRemoved.addListener(() => checkNoMeetTabsLeft());
-
-// Tab URL changed (e.g. hibernated by a tab suspender extension)
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.url && !changeInfo.url.startsWith("https://meet.google.com/")) {
-    checkNoMeetTabsLeft();
+// A tab suspender changes the tab's URL and Chrome's memory saver discards it. Without the "tabs"
+// permission, tab.url is only visible while the tab is on Meet, so a missing URL also means it left.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (!tabsInCall.has(tabId)) return;
+  if (changeInfo.discarded || !tab?.url?.startsWith(MEET_URL_PREFIX)) {
+    setTabInCall(tabId, false);
+  } else if (changeInfo.status === "complete") {
+    recheckTabInCall(tabId).catch((error) => {
+      console.warn(`MacMute: Could not check whether tab ${tabId} is still in the call`, error);
+    });
   }
 });
 
